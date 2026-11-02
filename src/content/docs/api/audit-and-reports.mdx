@@ -1,0 +1,132 @@
+---
+title: Audit & laporan
+description: Endpoint log transaksi, jurnal akuntansi, neraca saldo, dan semua ekspor PDF untuk admin dan supervisor.
+sidebar:
+  order: 7
+sources:
+  - routes/api.php
+  - app/Http/Controllers/API/Audit
+  - app/Http/Controllers/API/ReportController.php
+  - app/Services/ReportService.php
+  - app/Services/PdfReportService.php
+  - docs/API.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Endpoint from '../../../components/Endpoint.astro';
+
+Hanya baca untuk **admin** dan **supervisor**. Tidak ada endpoint yang menulis transaksi
+atau baris jurnal. Konsep: [Jejak audit dan jurnal](/concepts/audit-trail/).
+
+## Filter bersama
+
+Dipakai oleh daftar dan ekspor di bawah `/api/audit/*`.
+
+| Query | Keterangan |
+| --- | --- |
+| `from`, `to` | `YYYY-MM-DD` (sepanjang hari) atau `YYYY-MM-DD HH:MM` (tepat); `to` ≥ `from` |
+| `teller` | Nama atau username teller (mengandung) |
+| `customer` | Nama, nomor rekening, atau NIS nasabah (mengandung) |
+| `type` | Jenis transaksi |
+| `teller_id`, `customer_id` | Id persis |
+
+## Transaksi
+
+<Endpoint method="GET" path="/api/audit/transactions" roles="admin,supervisor" />
+
+Log transaksi, terbaru dulu (`per_page` bawaan 15), dengan `customer`, `teller`,
+`authorized_by`, dan `corrected_by`.
+
+<Endpoint method="GET" path="/api/audit/transactions/{transaction}" roles="admin,supervisor" />
+
+Detail menambahkan `journals` dan, untuk penarikan yang disetujui di aplikasi,
+`withdrawal_authorization` (`{ "id": "01M6...", "method": "mobile", "approved_at": "..." }`;
+tidak ada untuk penarikan dengan PIN di loket).
+
+```json title="200 — contoh dari basis data demo (dipendekkan)"
+{
+  "data": {
+    "id": 6, "type": "deposit", "type_label": "Setor tunai", "amount": 70000,
+    "balance_before": 1000000, "balance_after": 1070000, "daily_report_id": 2,
+    "corrected_by": { "id": 7, "type": "deposit_correction", "created_at": "2026-10-27T13:10:38.000000Z" },
+    "customer": { "id": 3, "account_number": "RPL-2026-002", "full_name": "Citra Lestari" },
+    "teller": { "id": 3, "full_name": "Teller Loket 1" },
+    "journals": [
+      { "id": 12, "transaction_id": 6, "account_code": "201", "account_name": "Tabungan Nasabah", "position": "credit", "amount": 70000, "created_at": "..." },
+      { "id": 11, "transaction_id": 6, "account_code": "101", "account_name": "Kas", "position": "debit", "amount": 70000, "created_at": "..." }
+    ],
+    "...": "field Transaction lainnya"
+  }
+}
+```
+
+<Endpoint method="GET" path="/api/audit/transactions/export" roles="admin,supervisor" />
+
+PDF jejak audit (`jejak-audit-transaksi.pdf`) dengan saldo sebelum/sesudah dan referensi
+koreksi. Filter sama dengan daftar.
+
+## Jurnal
+
+<Endpoint method="GET" path="/api/audit/journals" roles="admin,supervisor" />
+
+Baris jurnal, terbaru dulu (`per_page` bawaan 30), dengan teller dan nasabah dari
+transaksinya. Filter tambahan: `transaction_id`, `account_code`, `position`.
+
+```json title="200 — contoh dari basis data demo (dipendekkan)"
+{
+  "data": [
+    {
+      "id": 16, "transaction_id": 8, "account_code": "201", "account_name": "Tabungan Nasabah",
+      "position": "credit", "amount": 7000, "created_at": "2026-10-27T13:10:38.000000Z",
+      "transaction": {
+        "id": 8, "type": "deposit", "customer_id": 3, "user_id": 3,
+        "customer": { "account_number": "RPL-2026-002", "full_name": "Citra Lestari" },
+        "teller": { "full_name": "Teller Loket 1" }
+      }
+    }
+  ]
+}
+```
+
+<Endpoint method="GET" path="/api/audit/journals/summary" roles="admin,supervisor" />
+
+Neraca saldo per akun dengan filter yang sama. Entri ganda menjamin `is_balanced`.
+
+```json title="200 — contoh dari basis data demo"
+{
+  "data": {
+    "accounts": [
+      { "account_code": "101", "account_name": "Kas", "total_debit": 2452000, "total_credit": 100000 },
+      { "account_code": "201", "account_name": "Tabungan Nasabah", "total_debit": 100000, "total_credit": 2452000 }
+    ],
+    "total_debit": 2552000, "total_credit": 2552000, "is_balanced": true
+  }
+}
+```
+
+<Endpoint method="GET" path="/api/audit/journals/export" roles="admin,supervisor" />
+
+PDF laporan keuangan (`jurnal-akuntansi.pdf`): total per akun, pemeriksaan
+keseimbangan, setiap baris jurnal dengan teller, nasabah, dan nomor rekening. Filter
+sama dengan `/api/audit/journals`.
+
+## Laporan lain
+
+<Endpoint method="GET" path="/api/customers/{customer}/statement" roles="admin,supervisor" />
+
+Kartu simpanan nasabah mana pun sebagai PDF (`mutasi-RPL-2026-001.pdf`), dengan
+`?from=&to=`: saldo awal, setiap baris dengan saldo berjalan, dan total. Juga tersedia
+untuk rekening yang sudah ditutup.
+
+<Endpoint method="GET" path="/api/reports/annual" roles="admin,supervisor" />
+
+Laporan tahunan PDF (`laporan-tahunan-2026-2027.pdf`) untuk satu tahun ajaran
+(`?school_year=2026`, Juli–Juni, bawaan tahun ajaran berjalan): saldo per produk dan
+per rekening (awal, setoran, penarikan, akhir; bersih dari koreksi). **422** jika
+tahun tidak valid.
+
+<Aside type="note" title="Tentang ekspor">
+Semua ekspor berbentuk PDF (permintaan saat wawancara UKK: mudah dibaca dan dicetak,
+bukan CSV). Ekspor daftar mencetak maksimal 5.000 baris dan menyebutkan jika
+terpotong. Laporan tahunan tidak punya versi JSON (L10).
+</Aside>

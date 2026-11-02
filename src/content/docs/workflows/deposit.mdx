@@ -1,0 +1,115 @@
+---
+title: Setor tunai
+description: Alur setoran dari pencarian nasabah di loket sampai transaksi dan jurnal tercatat, termasuk prasyarat, idempotensi, dan kegagalan.
+sidebar:
+  order: 4
+sources:
+  - app/Http/Controllers/API/Teller/TransactionController.php
+  - app/Http/Controllers/API/Teller/CustomerLookupController.php
+  - app/Services/TransactionService.php
+  - docs/WORKFLOWS.md
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+import Mermaid from '../../../components/Mermaid.astro';
+
+## Ringkasan
+
+| | |
+| --- | --- |
+| Aktor | Teller |
+| Prasyarat | Teller punya shift aktif bertanggal hari ini; rekening `active` dan tidak ditutup |
+| Endpoint | `GET /api/teller/customers/lookup` lalu `POST /api/teller/deposits` |
+| Efek saldo | + nominal |
+| Jurnal | Debit 101 Kas / Kredit 201 Tabungan Nasabah |
+
+## Alur
+
+<Mermaid
+	caption="Setoran tunai di loket."
+	chart={`sequenceDiagram
+  autonumber
+  actor N as Nasabah
+  participant T as Teller (klien web)
+  participant A as API
+  participant D as Database
+  N->>T: menyerahkan kartu QR dan uang
+  T->>A: GET /teller/customers/lookup?identifier=BANKMINI:RPL-2026-001
+  A-->>T: 200 nama, status, saldo
+  T->>A: POST /teller/deposits + Idempotency-Key
+  A->>D: lock teller → shift → nasabah · saldo += nominal
+  A->>D: insert transaksi + 2 jurnal · COMMIT
+  A-->>T: 201 Transaction (balance_after, amount_in_words)
+  T-->>N: struk (GET /teller/transactions/{id}/receipt)`}
+/>
+
+<Steps>
+
+1. **Cari nasabah.** `identifier` dapat berupa payload QR hasil pindai
+   (`BANKMINI:RPL-2026-001`), nomor rekening, atau NIS. Awalan `BANKMINI:` dibuang,
+   lalu nasabah dicari berdasarkan nomor rekening, kemudian NIS. Pencarian **tidak**
+   membutuhkan shift. Rekening yang ditutup tidak ditemukan (`404 Nasabah tidak
+   ditemukan.`).
+
+2. **Catat setoran.**
+
+   ```http
+   POST /api/teller/deposits
+   Authorization: Bearer <token>
+   Idempotency-Key: 9f1c2e7a-0b4d-4c55-a1f0-2d9e6b1f3c11
+   Content-Type: application/json
+
+   { "account_number": "RPL-2026-001", "amount": 125000 }
+   ```
+
+   Kunci di atas hanyalah contoh; buat kunci baru (misalnya UUID) untuk setiap
+   transaksi.
+
+3. **Backend mencatat secara atomik**: lock teller, lock shift aktif, periksa ulang
+   idempotency key, lock nasabah, periksa status, tambah saldo, simpan transaksi, tulis
+   dua baris jurnal.
+
+4. **Tampilkan hasil dari server**, bukan dari isi formulir. Cetak struk dari
+   `GET /api/teller/transactions/{id}/receipt`.
+
+</Steps>
+
+```json title="201 — contoh respons dari basis data demo"
+{
+  "data": {
+    "id": 4, "type": "deposit", "type_label": "Setor tunai",
+    "amount": 125000, "amount_in_words": "seratus dua puluh lima ribu rupiah",
+    "balance_before": 500000, "balance_after": 625000,
+    "created_at": "2026-10-27T13:10:36.000000Z", "daily_report_id": 2,
+    "corrects_transaction_id": null, "note": null,
+    "customer": { "id": 1, "account_number": "RPL-2026-001", "full_name": "Budi Santoso" }
+  }
+}
+```
+
+## Kegagalan
+
+| Status | Pesan / kondisi | Penyebab |
+| --- | --- | --- |
+| `422` | Error field (`errors.amount`, `errors.account_number`) | Nominal bukan bilangan 1–100.000.000, rekening tidak ada atau ditutup |
+| `422` | `Belum ada shift yang dibuka. Buka shift dengan menghitung saldo awal terlebih dahulu.` | Tidak ada shift aktif |
+| `422` | `Shift hari ini sudah ditutup. Transaksi baru tidak dapat dilakukan sampai laporan ditolak supervisor.` | Shift hari ini sudah ditutup |
+| `422` | `Shift tanggal 2026-10-26 belum ditutup. Tutup shift tersebut sebelum bertransaksi.` | Shift hari sebelumnya masih terbuka |
+| `422` | `Rekening berstatus ditangguhkan dan tidak dapat bertransaksi.` | Rekening `suspended` |
+| `422` | `Idempotency-Key ini sudah dipakai untuk transaksi lain. …` | Kunci dipakai ulang untuk permintaan berbeda |
+| `200` | Header `Idempotent-Replayed: true` | Kunci dan permintaan sama: transaksi asli dikembalikan, tidak ada yang baru dicatat |
+| `403` | Peran salah | Bukan teller |
+| `500` | Error server | Semua perubahan dibatalkan |
+
+<Aside type="tip" title="Ulangi dengan kunci yang sama">
+Jika koneksi terputus sebelum respons diterima, kirim ulang permintaan **dengan
+`Idempotency-Key` yang sama**. Kunci baru akan mencatat setoran kedua.
+</Aside>
+
+<Aside type="note" title="Keterbatasan L4 · Header CORS">
+CORS tidak mengekspos header respons, sehingga aplikasi browser di origin lain tidak
+dapat membaca `Idempotent-Replayed`. Bedakan dengan status `201` (baru) dan `200`
+(ulangan).
+</Aside>
+
+Endpoint lengkap: [API Teller](/api/teller/#setor-tunai).

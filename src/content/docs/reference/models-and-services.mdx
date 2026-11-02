@@ -1,0 +1,91 @@
+---
+title: Model dan service
+description: Model Eloquent dengan relasi dan penjaga immutabilitasnya, enum, middleware, serta service yang memegang aturan bisnis.
+sidebar:
+  order: 2
+sources:
+  - app/Models
+  - app/Services
+  - app/Enums
+  - app/Http/Middleware
+  - routes/console.php
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Model
+
+| Model | Tabel | Relasi | Penjaga |
+| --- | --- | --- | --- |
+| `User` | `users` | `transactions`, `dailyReports` (teller), `reviewedDailyReports` (supervisor), `approvedCashTransfers`, `withdrawalAuthorizations` (teller) | — |
+| `Customer` | `customers` | `major`, `transactions`, `withdrawalAuthorizations` | Soft delete; `pin` di-cast `hashed` dan tersembunyi |
+| `Major` | `majors` | `customers` | — |
+| `DailyReport` | `daily_reports` | `teller`, `supervisor`, `transactions`, `cashCounts` (pecahan terbesar dulu), `cashTransfer` | Laporan `approved` tidak dapat diubah; laporan tidak pernah dapat dihapus |
+| `CashCount` | `cash_counts` | `dailyReport` | — |
+| `Transaction` | `transactions` | `customer` (termasuk yang ditutup), `teller`, `dailyReport`, `corrects`, `correction`, `authorizer`, `withdrawalAuthorization`, `accountingJournals` | Tidak dapat diubah atau dihapus |
+| `AccountingJournal` | `accounting_journals` | `transaction` | Tidak dapat diubah atau dihapus |
+| `CashTransfer` | `cash_transfers` | `dailyReport`, `approver` | Tidak dapat diubah atau dihapus |
+| `Setting` | `settings` | `updatedBy` | — |
+| `WithdrawalAuthorization` | `withdrawal_authorizations` | `teller`, `customer` (termasuk yang ditutup), `dailyReport`, `transaction` | `public_id` ULID dibuat otomatis dan dipakai sebagai route key; status final tidak dapat diubah; tidak pernah dapat dihapus |
+
+Penjaga immutabilitas dibuat di event model (`static::updating`, `static::deleting`)
+yang melempar `LogicException`. Ini lapisan tambahan di atas ketiadaan endpoint ubah
+atau hapus dan `ON DELETE RESTRICT` di database.
+
+## Enum
+
+| Enum | Nilai |
+| --- | --- |
+| `UserRoles` | `admin`, `supervisor`, `teller` |
+| `AccountStatus` | `active`, `suspended`, `inactive` |
+| `TransactionTypes` | `deposit`, `withdrawal`, `deposit_correction`, `withdrawal_correction` |
+| `ReportStatus` | `open`, `submitted`, `on_hold`, `approved`, `rejected` |
+| `CashCountStage` | `opening`, `closing` |
+| `AccountCode` | `101` (Kas), `201` (Tabungan Nasabah) |
+| `Position` | `debit`, `credit` |
+| `WithdrawalAuthorizationStatus` | `pending`, `approved`, `consumed`, `rejected`, `cancelled`, `expired` |
+
+## Service
+
+Aturan bisnis ada di `app/Services`. Controller tipis: memvalidasi, memanggil service,
+lalu memilih resource.
+
+| Service | Tanggung jawab | Method publik |
+| --- | --- | --- |
+| `TransactionService` | Setor, tarik, penyelesaian penarikan yang disetujui, koreksi. Semua lewat `record()` dalam satu transaksi database dengan row lock | `deposit`, `withdraw`, `completeAuthorizedWithdrawal`, `correct` |
+| `JournalService` | Menulis dua baris jurnal per transaksi | `record` |
+| `PinService` | Satu-satunya tempat PIN diperiksa; penghitung dan blokir bersama dalam transaksi sendiri | `verify`, `change` |
+| `WithdrawalAuthorizationService` | Membuat, menyetujui, menolak, membatalkan permintaan penarikan; menerapkan kedaluwarsa | `create`, `approve`, `reject`, `cancel`, `current`, `expireOverdue` |
+| `DailyReportService` | Membuka dan menutup shift, menghitung total, keputusan supervisor | `activeShift`, `shiftForTransaction`, `shiftForCorrection`, `open`, `close`, `summarize`, `approve`, `hold`, `reject`, `withLiveTotals` |
+| `CustomerService` | Membuka rekening dengan nomor otomatis, menutup rekening | `create`, `deactivate`, `nextAccountNumber` |
+| `SettingsService` | Membaca dan mengubah pengaturan beserta aturannya | `definitions`, `get`, `all`, `update`, `rules`, `minBalance`, `allowsMobileWithdrawalVerification`, `allowsTerminalWithdrawalVerification` |
+| `StaffImportService` | Impor staf dari `.xlsx`/`.csv`, semua atau tidak sama sekali | `import` |
+| `ReportService` | Data mutasi dan laporan tahunan | `statement`, `annual` |
+| `PdfReportService` | Membuat PDF dengan DomPDF | `dailyReport`, `receipt`, `statement`, `annual` |
+
+<Aside type="note" title="Urutan lock">
+Semua service yang mengubah uang mengunci baris dalam urutan yang sama: teller → shift →
+otorisasi penarikan → nasabah. Urutan tetap ini mencegah deadlock saat dua permintaan
+berjalan bersamaan.
+</Aside>
+
+## Middleware
+
+| Alias | Kelas | Fungsi |
+| --- | --- | --- |
+| `staff`, `staff:{peran,…}` | `App\Http\Middleware\EnsureStaffRole` | Token milik `User` aktif dengan peran yang diizinkan |
+| `customer` | `App\Http\Middleware\EnsureCustomer` | Token milik `Customer` yang tidak `inactive` |
+
+Rate limiter bernama didaftarkan di `AppServiceProvider`: `login` (per identifier + IP),
+`withdrawal-authorization-create`, `withdrawal-authorization-poll`, dan
+`withdrawal-authorization-decide` (per jenis aktor + id).
+
+## Perintah terjadwal
+
+Didefinisikan di `routes/console.php`; butuh `php artisan schedule:work` atau cron yang
+menjalankan `schedule:run`.
+
+| Perintah | Jadwal | Fungsi |
+| --- | --- | --- |
+| `sanctum:prune-expired --hours=24` | Harian | Menghapus token kedaluwarsa |
+| `bank:expire-withdrawal-authorizations` | Setiap menit | Menandai permintaan penarikan terbuka yang lewat batas waktu sebagai `expired`; mencetak `Expired: N` |

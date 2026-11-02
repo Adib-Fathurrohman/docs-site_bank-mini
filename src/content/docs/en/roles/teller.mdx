@@ -1,0 +1,44 @@
+---
+title: Teller
+description: What the teller can and cannot do, with the endpoints they use.
+sidebar:
+  order: 3
+sources:
+  - docs/RBAC.md
+  - routes/api.php
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+**Role:** `teller` (`users` table, usually a student on duty with `class` and `phone`
+fields). **Client:** staff web app. **Focus:** counter operations.
+
+## Can
+
+| Capability | Endpoints |
+| --- | --- |
+| Open, view and close their own shift | `GET /api/teller/shift`, `POST /api/teller/shift/open`, `/close` |
+| Look up a customer by QR, account number or NIS | `GET /api/teller/customers/lookup` |
+| Cash deposit | `POST /api/teller/deposits` |
+| Start, poll, cancel and complete a withdrawal the customer approves in the app | `/api/teller/withdrawal-authorizations…` |
+| Cash withdrawal with the PIN at the counter (only in `terminal`/`both` mode) | `POST /api/teller/withdrawals` |
+| Correct their own transaction with a supervisor's credentials | `POST /api/teller/transactions/{id}/correct` |
+| View their own transactions per day, print receipts | `GET /api/teller/transactions`, `…/{id}/receipt` |
+| View their own shift history, print daily reports | `GET /api/teller/daily-reports`, `/{id}`, `/{id}/export` |
+| Read majors and settings | `GET /api/majors`, `GET /api/settings` |
+
+## Cannot
+
+- Browse the account list (only look up one customer).
+- See other tellers' data (shifts, transactions, withdrawal requests: `404`).
+- Review reports, read the audit log or journal, change settings.
+- Manage staff or accounts.
+- Edit or delete transactions (corrections only).
+- Approve a withdrawal on the customer's behalf or see the customer's PIN in Mode A.
+
+<Aside type="caution" title="One open withdrawal request">
+A teller can have only one open withdrawal request (`pending` or `approved`) at a time.
+</Aside>
+
+Related: [Cash deposit](/en/workflows/deposit/) · [Cash withdrawal](/en/workflows/withdrawal/) ·
+[PIN approval](/en/workflows/withdrawal-pin-authorization/) · [Teller API](/en/api/teller/)

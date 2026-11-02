@@ -1,0 +1,141 @@
+---
+title: Login and sessions
+description: The single login gateway for staff and customers, using the token, expiry, logout, and responses when access is refused.
+sidebar:
+  order: 1
+sources:
+  - app/Http/Controllers/API/LoginController.php
+  - app/Http/Controllers/API/Staff/AuthController.php
+  - app/Http/Controllers/API/Customer/AuthController.php
+  - app/Providers/AppServiceProvider.php
+  - docs/AUTH.md
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+## Summary
+
+| | |
+| --- | --- |
+| Actors | All staff and customers |
+| Endpoint | `POST /api/login` (aliases: `/api/staff/login`, `/api/customer/login`) |
+| Mechanism | Laravel Sanctum personal access tokens (bearer), stored hashed in `personal_access_tokens` |
+| Lifetime | 480 minutes (8 hours) from creation, absolute. No refresh endpoint |
+| Cookies / sessions | Not used |
+
+## Login flow
+
+<Mermaid
+	caption="The body decides between staff and customer login."
+	chart={`flowchart TD
+  A["POST /api/login"] --> RL{"Rate limit<br/>5/min per identity + IP"}
+  RL -- "exceeded" --> E429["429 Too Many Attempts."]
+  RL -- "ok" --> B{"username filled?"}
+  B -- "yes" --> S["Staff login<br/>bcrypt + is_active"]
+  B -- "no" --> C{"identifier filled?"}
+  C -- "yes" --> N["Customer login<br/>PinService::verify (shared lock)"]
+  C -- "no" --> E422["422 send username and password<br/>or NIS/account and PIN"]
+  S -- "success" --> T1["200 actor: staff · token · user"]
+  N -- "success" --> T2["200 actor: customer · token · customer"]
+  S -- "failure" --> F1["422 errors.username"]
+  N -- "failure" --> F2["422 errors.identifier"]`}
+/>
+
+<Steps>
+
+1. The client sends **one** set of credentials:
+
+   ```json title="Staff"
+   { "username": "teller", "password": "password" }
+   ```
+
+   ```json title="Customer (NIS or account number)"
+   { "identifier": "20260001", "pin": "123456" }
+   ```
+
+2. The backend checks the credentials. For customers the account number is tried
+   first, then the NIS; both lead to the same PIN counter.
+
+3. On success the backend creates a token and returns it **only once**:
+
+   ```json title="200 — example response from the demo database (token shortened)"
+   {
+     "data": {
+       "actor": "staff",
+       "token": "3|FsAYFafTXVEvVS53…",
+       "token_type": "Bearer",
+       "user": { "id": 3, "username": "teller", "full_name": "Teller Loket 1", "role": "teller", "is_active": true }
+     }
+   }
+   ```
+
+   For customers, `actor` is `"customer"` and the profile is in `data.customer`.
+
+4. The client opens the portal for `data.actor`, then for `data.user.role` (staff).
+
+</Steps>
+
+## Login refusals (`422`)
+
+| Message | Cause |
+| --- | --- |
+| `Username atau password salah.` | Unknown username or wrong password |
+| `Akun staf ini sudah dinonaktifkan.` | Correct password but the staff member is blocked |
+| `NIS/nomor rekening atau PIN salah.` | Unknown identifier, wrong PIN, or a closed account. Remaining attempts are **not** shown |
+| `Terlalu banyak percobaan PIN salah. Coba lagi pukul HH:MM.` | The PIN is locked (3 wrong in a row anywhere). Local time |
+| `Rekening ini sudah tidak aktif.` | An `inactive` account that is not soft-deleted; only after a correct PIN (practically unreachable through API flows) |
+| `Isi username dan password (staf) atau NIS/nomor rekening dan PIN (nasabah).` | Neither credential set was sent |
+
+**Suspended** accounts can still log in.
+
+## Using the token
+
+```http
+GET /api/teller/shift
+Accept: application/json
+Authorization: Bearer <token>
+```
+
+On every request the token owner is reloaded from the database. Blocking a staff
+member, changing a role or closing an account takes effect immediately.
+
+| Actor | Own profile | Logout |
+| --- | --- | --- |
+| Staff | `GET /api/staff/me` | `POST /api/staff/logout` |
+| Customer | `GET /api/customer/me` | `POST /api/customer/logout` |
+
+Logout revokes only the token used for that request; other devices stay logged in. The
+server also revokes tokens when an admin blocks or deletes a staff member, or closes a
+customer account.
+
+## When access is refused
+
+| Status | Message | Meaning | Client action |
+| --- | --- | --- | --- |
+| `401` | `Unauthenticated.` | Missing, invalid, revoked or expired token | Delete the token, show login |
+| `403` | `Fitur ini khusus untuk staf bank.` | Customer token on a staff endpoint | Delete the token, show login |
+| `403` | `Fitur ini khusus untuk nasabah.` | Staff token on a customer endpoint | Delete the token, show login |
+| `403` | `Akun staf ini sudah dinonaktifkan.` | Staff member blocked while logged in | Delete the token, show login with the message |
+| `403` | `Rekening ini sudah tidak aktif.` | Customer account closed | Delete the token, show login |
+| `403` | `Peran Anda tidak memiliki akses ke fitur ini.` | Wrong staff role for the endpoint | Return to login (UKK rubric 3.2) |
+
+API routes never redirect; guests always get a JSON `401`.
+
+## Storing the token in clients
+
+<Aside type="tip" title="Recommendations from the backend documentation">
+- **Staff web:** keep it in memory and `sessionStorage` (cleared when the tab closes),
+  which suits shared counter computers. Re-validate with `GET /api/staff/me` when the
+  app loads.
+- **Expo:** store it with `expo-secure-store` (Keychain / Android Keystore), not
+  `AsyncStorage`. Never store the PIN.
+</Aside>
+
+## Not available
+
+Token refresh or sliding sessions · "remember me" options · forgot password or PIN ·
+staff changing their own password · listing or revoking other devices' sessions ·
+two-factor authentication.
+
+Full endpoints: [Authentication API](/en/api/authentication/).

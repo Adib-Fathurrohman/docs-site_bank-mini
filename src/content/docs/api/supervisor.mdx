@@ -1,0 +1,133 @@
+---
+title: Supervisor
+description: Endpoint pemeriksaan laporan harian (setujui, tahan, tolak) dan buku brankas.
+sidebar:
+  order: 6
+sources:
+  - routes/api.php
+  - app/Http/Controllers/API/Supervisor
+  - app/Services/DailyReportService.php
+  - app/Http/Resources/DailyReportResource.php
+  - docs/API.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Endpoint from '../../../components/Endpoint.astro';
+
+Semua endpoint di halaman ini butuh token **supervisor**. Laporan diperiksa satu per
+satu (tidak ada persetujuan massal). Alur: [Shift dan laporan harian](/workflows/shift-management/#4-pemeriksaan-supervisor).
+
+## Laporan harian
+
+<Endpoint method="GET" path="/api/supervisor/daily-reports" roles="supervisor" />
+
+Daftar [DailyReport](#objek-dailyreport) dengan `teller` dan `supervisor`, tanggal
+terbaru dulu (`per_page` bawaan 15). Shift yang masih terbuka menampilkan total
+langsung.
+
+| Query | Keterangan |
+| --- | --- |
+| `status` | `open`, `submitted`, `on_hold`, `approved`, `rejected` |
+| `date` | `YYYY-MM-DD` |
+| `teller_id` | Filter teller (lihat `GET /api/staff?role=teller`) |
+
+<Endpoint method="GET" path="/api/supervisor/daily-reports/{dailyReport}" roles="supervisor" />
+
+Satu laporan dengan hitungan uang, `cash_transfer`, dan daftar `transactions` di tingkat
+atas, untuk dibandingkan dengan slip dan uang fisik.
+
+<Endpoint method="GET" path="/api/supervisor/daily-reports/{dailyReport}/export" roles="supervisor" />
+
+PDF yang sama dengan milik teller, dengan kunci yang sama (hanya untuk `submitted`,
+`on_hold`, `approved`).
+
+<Endpoint method="POST" path="/api/supervisor/daily-reports/{dailyReport}/approve" roles="supervisor" />
+
+`note` opsional (maks. 1000). Dari `submitted` atau `on_hold`. **Persetujuan mencatat
+uang yang dihitung berpindah dari laci teller ke brankas utama** dan bersifat final.
+
+```json title="200 — contoh dari basis data demo (dipendekkan)"
+{
+  "data": {
+    "id": 2, "report_date": "2026-10-27", "status": "approved",
+    "opening_balance": 150000, "transaction_count": 5, "total_deposit": 132000, "total_withdrawal": 30000,
+    "system_balance": 252000, "physical_balance": 252000, "difference": 0,
+    "reviewed_at": "2026-10-27T13:10:39.000000Z", "supervisor_note": "Sesuai, kas diterima di brankas",
+    "teller": { "id": 3, "full_name": "Teller Loket 1", "class": "XI AK 1" },
+    "supervisor": { "id": 2, "full_name": "Supervisor Bank Mini" },
+    "cash_transfer": { "id": 2, "amount": 252000, "transferred_at": "2026-10-27T13:10:39.000000Z" },
+    "...": "field DailyReport lainnya"
+  }
+}
+```
+
+<Endpoint method="POST" path="/api/supervisor/daily-reports/{dailyReport}/hold" roles="supervisor" />
+
+`note` **wajib**. Dari `submitted` ke `on_hold` (tertunda, misalnya menunggu slip asli).
+Teller tetap dapat membuka shift hari berikutnya.
+
+<Endpoint method="POST" path="/api/supervisor/daily-reports/{dailyReport}/reject" roles="supervisor" />
+
+`note` **wajib**. Dari `submitted` atau `on_hold` ke `rejected`: shift dibuka kembali
+agar teller dapat mengoreksi dan menutupnya lagi. Ditolak jika teller sedang menjalankan
+shift lain (tahan laporannya saja).
+
+**422** untuk keputusan pada laporan yang tidak sedang menunggu pemeriksaan:
+`Laporan berstatus "disetujui" tidak dapat diproses.`
+
+## Buku brankas
+
+<Endpoint method="GET" path="/api/supervisor/cash-transfers" roles="supervisor" />
+
+Daftar kas yang pindah dari laci teller ke brankas utama (dibuat oleh persetujuan),
+terbaru dulu, dengan `total_amount` untuk filter yang dipakai. Hanya baca.
+
+| Query | Keterangan |
+| --- | --- |
+| `from`, `to` | `YYYY-MM-DD` |
+| `teller_id` | Filter teller |
+
+```json title="200 — contoh dari basis data demo (dipendekkan)"
+{
+  "data": [
+    {
+      "id": 2, "source": "teller_drawer", "destination": "main_vault",
+      "amount": 252000, "transferred_at": "2026-10-27T13:10:39.000000Z",
+      "daily_report": { "id": 2, "report_date": "2026-10-27", "teller": { "id": 3, "full_name": "Teller Loket 1" } },
+      "approved_by": { "id": 2, "full_name": "Supervisor Bank Mini" }
+    }
+  ],
+  "meta": { "current_page": 1, "per_page": 15, "total": 2 },
+  "total_amount": 2602000
+}
+```
+
+<Endpoint method="GET" path="/api/supervisor/cash-transfers/{cashTransfer}" roles="supervisor" />
+
+Satu pemindahan beserta laporan dan pemberi persetujuannya.
+
+## Objek DailyReport
+
+| Field | Keterangan |
+| --- | --- |
+| `id`, `report_date`, `status` | Satu per teller per hari |
+| `opening_balance`, `opened_at` | Saldo awal |
+| `transaction_count`, `total_deposit`, `total_withdrawal` | Bersih dari koreksi; langsung selama terbuka |
+| `system_balance` | `opening_balance + total_deposit − total_withdrawal` |
+| `physical_balance`, `difference` | Uang yang dihitung dan `fisik − sistem` (0 setelah ditutup); null selama shift `open`. Shift `rejected` masih menampilkan hitungan sebelumnya sampai ditutup lagi (L3) |
+| `submitted_at`, `reviewed_at`, `supervisor_note` | |
+| `teller` | `{ id, full_name, class }`, di endpoint supervisor |
+| `supervisor` | `{ id, full_name }` pemeriksa, atau null |
+| `opening_counts`, `closing_counts` | `[{ denomination, quantity, subtotal }]`, pecahan terbesar dulu |
+| `cash_transfer` | `{ id, amount, transferred_at }` setelah disetujui, atau null |
+
+### Objek CashTransfer
+
+`id`, `source` (`teller_drawer`), `destination` (`main_vault`), `amount`,
+`transferred_at`, `daily_report` `{ id, report_date, teller }`, `approved_by`
+`{ id, full_name }`.
+
+<Aside type="note" title="Belum tersedia">
+Memindahkan kas dari brankas ke teller tidak tersedia; saldo awal shift hanya dihitung
+oleh teller.
+</Aside>

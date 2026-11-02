@@ -1,0 +1,218 @@
+---
+title: PIN approval in the app
+description: Mode A — the teller starts a withdrawal, the customer approves it with their PIN in the app, and the teller completes it exactly once.
+sidebar:
+  order: 6
+sources:
+  - app/Services/WithdrawalAuthorizationService.php
+  - app/Services/TransactionService.php
+  - app/Http/Controllers/API/Teller/WithdrawalAuthorizationController.php
+  - app/Http/Controllers/API/Customer/WithdrawalAuthorizationController.php
+  - app/Models/WithdrawalAuthorization.php
+  - docs/PIN_VERIFICATION.md
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+This is the default way (`withdrawal_verification = mobile`) to authorize a
+withdrawal. The teller **never** sees, types or sends the PIN, and the customer can
+**never** start a withdrawal.
+
+## Summary
+
+| | |
+| --- | --- |
+| Actors | Teller (creates and completes), customer (approves with the PIN or rejects) |
+| Preconditions | Mode `mobile`/`both`; the teller has a shift dated today; account `active`; PIN not locked; balance − amount ≥ minimum balance; no open request of this teller and none for this customer |
+| Time limits | 120 seconds to approve, then 120 seconds to complete |
+| Updates | Polling (no push) |
+| Result | One `withdrawal` transaction per request, never more |
+
+## The full sequence
+
+<Mermaid
+	caption="Three HTTP requests, two clients, one transaction."
+	chart={`sequenceDiagram
+  autonumber
+  participant T as Teller (web)
+  participant A as API
+  participant N as Customer (Expo)
+  T->>A: POST /teller/withdrawal-authorizations {account_number, amount}
+  Note over A: check shift, status, PIN lock,<br/>minimum balance, open requests
+  A-->>T: 201 {id, status: pending, expires_at, server_time}
+  loop about every 2 s
+    T->>A: GET /teller/withdrawal-authorizations/{id}
+    A-->>T: status: pending
+  end
+  N->>A: GET /customer/withdrawal-authorizations (polling)
+  A-->>N: amount, teller name, balance, balance after
+  N->>A: POST /customer/withdrawal-authorizations/{id}/approve {pin}
+  Note over A: PinService::verify<br/>pending → approved
+  A-->>N: 200 status: approved
+  T->>A: GET /teller/withdrawal-authorizations/{id}
+  A-->>T: status: approved, approval_expires_at
+  T->>A: POST /teller/withdrawal-authorizations/{id}/complete
+  Note over A: one DB transaction:<br/>lock · consumed · withdraw · journal
+  A-->>T: 201 Transaction (receipt)`}
+/>
+
+## Request statuses
+
+<Mermaid
+	caption="Only pending and approved are open. Every other status is final."
+	chart={`stateDiagram-v2
+  direction LR
+  [*] --> pending: teller creates
+  pending --> approved: customer approves (PIN)
+  pending --> rejected: customer rejects
+  pending --> cancelled: teller cancels / shift closed
+  pending --> expired: 120 s pass
+  approved --> consumed: teller completes
+  approved --> cancelled: teller cancels / shift closed
+  approved --> expired: 120 s after approval
+  consumed --> [*]
+  rejected --> [*]
+  cancelled --> [*]
+  expired --> [*]`}
+/>
+
+| Status | Label | Open |
+| --- | --- | :-: |
+| `pending` | Menunggu persetujuan nasabah | ✓ |
+| `approved` | Disetujui nasabah | ✓ |
+| `consumed` | Selesai | |
+| `rejected` | Ditolak nasabah | |
+| `cancelled` | Dibatalkan (`cancel_reason`: `teller` or `shift_closed`) | |
+| `expired` | Kedaluwarsa | |
+
+Expiry is applied **on read** (every read and action), so clients always see the real
+status, and also by the scheduled command `bank:expire-withdrawal-authorizations`
+every minute.
+
+## Step by step
+
+<Steps>
+
+1. **The teller creates a request.**
+
+   ```json title="POST /api/teller/withdrawal-authorizations"
+   { "account_number": "RPL-2026-001", "amount": 50000 }
+   ```
+
+   The backend checks everything the withdrawal will need **before** the customer is
+   asked. No money moves.
+
+   ```json title="201 — example response from the demo database"
+   {
+     "data": {
+       "id": "01M6AMM4CNBR52V8MKC0JEDPJM", "status": "pending",
+       "status_label": "Menunggu persetujuan nasabah",
+       "amount": 50000, "amount_in_words": "lima puluh ribu rupiah",
+       "customer": { "id": 1, "account_number": "RPL-2026-001", "full_name": "Budi Santoso", "class": "X" },
+       "daily_report_id": 2,
+       "created_at": "2026-11-01T04:07:01.000000Z", "expires_at": "2026-11-01T04:09:01.000000Z",
+       "approved_at": null, "approval_expires_at": null, "rejected_at": null,
+       "cancelled_at": null, "cancel_reason": null, "consumed_at": null, "transaction_id": null,
+       "server_time": "2026-11-01T04:07:01.782795Z"
+     }
+   }
+   ```
+
+   `id` is a ULID. Use `server_time` for an accurate countdown to `expires_at`.
+
+2. **The teller polls the status** with `GET /api/teller/withdrawal-authorizations/{id}`
+   (about every 2 seconds). After a page reload, `?status=open` on the list returns
+   the request in progress.
+
+3. **The customer sees the request** through `GET /api/customer/withdrawal-authorizations`
+   (their open requests, not paginated), with the amount, the teller's name, the
+   balance and `balance_after` (a preview of the balance after the withdrawal).
+
+4. **The customer approves with their PIN**, or rejects.
+
+   ```json title="POST /api/customer/withdrawal-authorizations/{id}/approve"
+   { "pin": "123456" }
+   ```
+
+   The PIN is checked against the shared counter, then the status goes
+   `pending → approved` and `approval_expires_at` = now + 120 seconds. After a wrong
+   PIN the request stays `pending` and can be approved with the right PIN. To reject:
+   `POST …/{id}/reject` (`pending → rejected`).
+
+5. **The teller completes it.** `POST /api/teller/withdrawal-authorizations/{id}/complete`
+   with no body. The account and amount come **from the request**, never from the
+   body.
+
+   ```json title="201 — example response from the demo database"
+   {
+     "data": {
+       "id": 4, "type": "withdrawal", "type_label": "Tarik tunai",
+       "amount": 50000, "amount_in_words": "lima puluh ribu rupiah",
+       "balance_before": 500000, "balance_after": 450000,
+       "created_at": "2026-11-01T04:07:02.000000Z", "daily_report_id": 2,
+       "corrects_transaction_id": null, "note": null,
+       "withdrawal_authorization": { "id": "01M6AMM4CNBR52V8MKC0JEDPJM", "method": "mobile", "approved_at": "2026-11-01T04:07:02.000000Z" },
+       "customer": { "id": 1, "account_number": "RPL-2026-001", "full_name": "Budi Santoso" }
+     }
+   }
+   ```
+
+</Steps>
+
+## Exactly-once completion
+
+`complete` runs in `TransactionService::record()` in **one database transaction**:
+
+1. Lock the teller and today's shift.
+2. Lock the request row (`SELECT … FOR UPDATE`). If it is already `consumed`, return
+   its transaction. Otherwise it must be `approved`, not past `approval_expires_at`,
+   and belong to this shift.
+3. Lock the customer and run the normal withdrawal checks (status, minimum balance).
+4. Insert the transaction, then `UPDATE … SET status = consumed, transaction_id = …
+   WHERE status = approved`. Anything other than one affected row aborts.
+5. Write the two journal lines.
+
+On any failure everything is rolled back and the request stays `approved`, so the
+teller can retry until it expires. The unique `transaction_id` is a final database
+guard.
+
+<Aside type="tip" title="Safe to retry">
+Calling `complete` again after a timeout returns **the same** transaction with status
+`200`. No `Idempotency-Key` is needed.
+</Aside>
+
+## Concurrency
+
+| Situation | Behavior |
+| --- | --- |
+| Two tellers create a request for the same customer at the same time | Serialized by the customer row lock; the second gets `422` |
+| Approve, reject and cancel race | Compare-and-set updates (`UPDATE … WHERE status = …`): exactly one wins, the others get `422` with the current status |
+| The shift is closed while a request is open | The request is cancelled (`shift_closed`) in the same transaction as the close |
+
+## Failures
+
+| Status | Message / condition |
+| --- | --- |
+| `422` | `Masih ada permintaan penarikan yang belum selesai. Selesaikan atau batalkan terlebih dahulu.` (the teller already has an open request) |
+| `422` | `Nasabah ini masih memiliki permintaan penarikan yang belum selesai.` (from any teller) |
+| `422` | `Persetujuan penarikan melalui aplikasi nasabah sedang tidak diaktifkan.` (setting is `terminal`) |
+| `422` | Wrong PIN (`remaining_attempts`) or locked (`pin_locked_until`) on approve |
+| `422` | Status not usable, with a `status` field: e.g. `Permintaan penarikan ini berstatus "selesai" dan tidak dapat diproses.` |
+| `422` | `Persetujuan nasabah sudah kedaluwarsa. Buat permintaan penarikan baru.` |
+| `422` | `Permintaan penarikan ini dibuat pada shift lain.` |
+| `422` | Deposit failures (shift, suspended account) and the minimum balance |
+| `404` | A request of another teller or customer |
+| `403` | Staff token on approve/reject; customer token on create |
+| `429` | Rate limits: create 10/min per teller; list/show/cancel/complete 120/min per actor; approve/reject 5/min per customer |
+
+## Known limitations
+
+- **Polling only (L19).** The customer must open the app or refresh to see a new
+  request.
+- **Customer tokens have no abilities (L20).** Any device where the customer is logged
+  in can approve.
+- **Account closed mid-flow (L21).** If an admin closes the account between approval
+  and completion, `complete` answers `404` and the request eventually expires.
+
+Full endpoints: [Withdrawal authorization API](/en/api/withdrawal-authorizations/).

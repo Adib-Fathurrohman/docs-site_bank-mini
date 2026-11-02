@@ -1,0 +1,12 @@
+{
+  "backend": {
+    "dir": "../bank-mini-laravel",
+    "sourcePrefix": "",
+    "commit": "4610046"
+  },
+  "frontend": {
+    "dir": "../bank_mini",
+    "sourcePrefix": "bank_mini/",
+    "commit": "4ac5d79"
+  }
+}

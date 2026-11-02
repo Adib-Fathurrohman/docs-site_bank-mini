@@ -1,0 +1,102 @@
+---
+title: Home
+description: Technical documentation for E-Teller Bank Mini Sekolah, a school's internal banking system built for the UKK exam.
+template: splash
+hero:
+  title: E-Teller Bank Mini Sekolah
+  tagline: Technical documentation for a school's internal bank. A Laravel API for cash deposits and withdrawals at the counter, customer PIN approval of withdrawals, teller shifts with cash reconciliation, and a double-entry accounting journal.
+  actions:
+    - text: Get started
+      link: /en/getting-started/introduction/
+      icon: right-arrow
+    - text: API reference
+      link: /en/api/
+      variant: minimal
+---
+
+import { Badge, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Mermaid from '../../../components/Mermaid.astro';
+
+## Overview
+
+Bank Mini Sekolah is an in-school bank for students. All money moves through a
+**teller at the counter**: the teller records cash deposits and cash withdrawals.
+Students (customers, *nasabah*) never move money themselves. They can view their
+account and **approve or reject a withdrawal that a teller started**, using their
+PIN in their app.
+
+The system is not connected to a payment gateway or an outside bank. Every
+transaction writes two journal lines (debit and credit) automatically, and a
+supervisor reviews each teller's daily report before the cash moves to the vault.
+
+<Mermaid
+	caption="One Laravel backend serves two clients. All access goes through the REST API with Sanctum tokens."
+	chart={`flowchart LR
+  subgraph Clients
+    W["Staff web app<br/>React · Admin, Supervisor, Teller"]
+    M["Customer mobile app<br/>React Native + Expo · Students"]
+  end
+  W -- "HTTPS · JSON · Bearer token" --> API
+  M -- "HTTPS · JSON · Bearer token" --> API
+  subgraph Backend
+    API["Laravel REST API<br/>/api/*"]
+    DB[("MariaDB<br/>InnoDB")]
+    PDF["PDF<br/>DomPDF"]
+  end
+  API --> DB
+  API --> PDF`}
+/>
+
+## Start here
+
+<CardGrid>
+	<LinkCard
+		title="Getting started"
+		description="System requirements, backend installation, .env configuration and demo accounts."
+		href="/en/getting-started/introduction/"
+	/>
+	<LinkCard
+		title="System architecture"
+		description="Components, request flow, backend layers and how the clients talk to the API."
+		href="/en/concepts/architecture/"
+	/>
+	<LinkCard
+		title="Workflows"
+		description="Deposits, withdrawals, PIN approval, corrections and shifts on the server side, with diagrams."
+		href="/en/workflows/deposit/"
+	/>
+	<LinkCard
+		title="API reference"
+		description="67 endpoints with parameters, validation rules, example responses and errors."
+		href="/en/api/"
+	/>
+	<LinkCard
+		title="Roles & permissions"
+		description="What Admin, Supervisor, Teller and Customer can and cannot do."
+		href="/en/roles/admin/"
+	/>
+	<LinkCard
+		title="Technical reference"
+		description="Database schema, models, services, error handling and security."
+		href="/en/reference/database-schema/"
+	/>
+</CardGrid>
+
+## Pick your path
+
+| You are | Read first |
+| --- | --- |
+| A backend developer | [Installation](/en/getting-started/installation/) → [Architecture](/en/concepts/architecture/) → [Database schema](/en/reference/database-schema/) → [Services](/en/reference/models-and-services/) |
+| Building the staff web app (React) | [Authentication](/en/workflows/authentication/) → [Roles & permissions](/en/concepts/roles-and-permissions/) → [API reference](/en/api/) → [Errors](/en/api/errors/) |
+| Building the customer mobile app (Expo) | [Authentication](/en/workflows/authentication/) → [Customer API](/en/api/customer/) → [PIN approval](/en/workflows/withdrawal-pin-authorization/) |
+| A UKK examiner or supervisor | [Introduction](/en/getting-started/introduction/) → [Transaction lifecycle](/en/concepts/transaction-lifecycle/) → [Audit trail](/en/concepts/audit-trail/) → [Security](/en/reference/security/) |
+
+## Component status
+
+This documentation only describes features that can be verified in the code.
+
+| Component | Status | Notes |
+| --- | --- | --- |
+| Laravel backend (REST API) | <Badge text="Done" variant="success" /> | 67 routes, covered by automated tests. Fully documented on this site |
+| Staff web app (React) | <Badge text="In development" variant="caution" /> | Separate repository. Its documentation waits until the app is finished |
+| Customer mobile app (Expo) | <Badge text="Not started" variant="note" /> | No repository yet. See [Client apps](/en/clients/) |

@@ -1,0 +1,57 @@
+---
+title: Client app status
+description: The status of the staff web app and the customer mobile app, and the plan for their documentation.
+status: coming-soon
+sidebar:
+  order: 1
+  label: Status
+  badge:
+    text: Soon
+    variant: caution
+sources:
+  - docs/FRONTEND_HANDOFF.md
+  - bank_mini/front-end/README.md
+---
+
+import { Aside, Badge } from '@astrojs/starlight/components';
+
+Client app documentation is **postponed** until the apps are finished. This page only
+records the status that can be verified and what will be added later. No layouts,
+screens or interactions are described here, because they are not final.
+
+## Status
+
+| App | Users | Status | Notes |
+| --- | --- | --- | --- |
+| Staff web app (React) | Admin, Supervisor, Teller | <Badge text="In development" variant="caution" /> | Separate repository (`bank_mini/front-end`). Vite, React 19, TypeScript, React Router, TanStack Query, Tailwind CSS 4, Vitest |
+| Customer mobile app (React Native + Expo) | Customers | <Badge text="Not started" variant="note" /> | No repository yet |
+
+<Aside type="caution" title="Don't assume">
+The backend provides 67 endpoints, but that does **not** mean every endpoint is already
+used by a client app. Per-feature status will be recorded when the client documentation
+is written.
+</Aside>
+
+## What client developers can use today
+
+- [Login and sessions](/en/workflows/authentication/): the login flow, tokens and
+  handling `401`/`403`.
+- [Roles and permissions](/en/concepts/roles-and-permissions/): the matrix for route
+  guards.
+- [API reference](/en/api/) and [Errors](/en/api/errors/).
+- [PIN approval in the app](/en/workflows/withdrawal-pin-authorization/): the polling
+  contract between the teller client and the customer app.
+- In the backend repository: `docs/FRONTEND_HANDOFF.md` and `docs/UI_REQUIREMENTS.md`
+  (functional requirements per role that the API supports; not a UI design).
+
+## Documentation plan
+
+This section will have two subsections. New pages only need to be added as MDX files in
+the right folder; the sidebar picks them up automatically.
+
+| Folder | Planned topics |
+| --- | --- |
+| `clients/web/` | Running the web app, configuration (`VITE_API_BASE_URL`), project structure, authentication and session storage, guides per role |
+| `clients/mobile/` | Running the Expo app, configuration (`EXPO_PUBLIC_API_BASE_URL`), secure token storage, the withdrawal approval screen, customer guide |
+
+The topics above are plans, not existing features.

@@ -1,0 +1,96 @@
+---
+title: Jejak audit dan jurnal akuntansi
+description: Jurnal entri ganda yang ditulis otomatis, data yang tidak dapat diubah, perlindungan di database, dan cara membaca jejak audit.
+sidebar:
+  order: 6
+sources:
+  - app/Services/JournalService.php
+  - app/Http/Controllers/API/Audit
+  - database/migrations
+  - docs/API.md
+  - docs/DATA_MODEL.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Mermaid from '../../../components/Mermaid.astro';
+
+## Jurnal entri ganda
+
+Setiap transaksi otomatis menulis **tepat dua baris jurnal** (`accounting_journals`):
+satu debit dan satu kredit, dengan nominal sama dengan nominal transaksi. Jurnal
+ditulis oleh `JournalService::record()` di dalam transaksi database yang sama dengan
+perubahan saldo.
+
+Hanya ada dua akun:
+
+| Kode | Nama | Arti |
+| --- | --- | --- |
+| `101` | Kas | Uang tunai yang dipegang bank mini |
+| `201` | Tabungan Nasabah | Kewajiban bank kepada nasabah (saldo tabungan) |
+
+| Transaksi | Debit | Kredit |
+| --- | --- | --- |
+| `deposit` | 101 Kas | 201 Tabungan Nasabah |
+| `withdrawal` | 201 Tabungan Nasabah | 101 Kas |
+| `deposit_correction` | 201 Tabungan Nasabah | 101 Kas |
+| `withdrawal_correction` | 101 Kas | 201 Tabungan Nasabah |
+
+<Mermaid
+	caption="Contoh ilustrasi: setoran Rp125.000 menghasilkan satu transaksi dan dua baris jurnal."
+	chart={`flowchart LR
+  T["Transaksi #4<br/>deposit · Rp125.000"] --> D["Jurnal: 101 Kas<br/>debit Rp125.000"]
+  T --> K["Jurnal: 201 Tabungan Nasabah<br/>kredit Rp125.000"]`}
+/>
+
+Karena setiap transaksi seimbang, total debit selalu sama dengan total kredit.
+`GET /api/audit/journals/summary` mengembalikan neraca saldo per akun dengan
+`is_balanced`.
+
+## Apa yang tidak dapat diubah
+
+| Data | Perlindungan |
+| --- | --- |
+| Transaksi | Tidak ada endpoint ubah/hapus; penjaga di model; koreksi lewat transaksi baru |
+| Baris jurnal | Tidak ada endpoint tulis (`405` untuk metode lain); penjaga di model |
+| Laporan harian yang disetujui | Final; penjaga di model |
+| Pemindahan kas ke brankas | Tidak dapat diubah |
+| Otorisasi penarikan yang sudah selesai | Model menolak perubahan pada status final dan menolak penghapusan |
+| Staf dengan riwayat | Hanya dapat diblokir, tidak dapat dihapus (`409`) |
+
+## Perlindungan di database
+
+| Mekanisme | Contoh |
+| --- | --- |
+| Foreign key `ON DELETE RESTRICT` | Data yang punya riwayat tidak dapat dihapus |
+| `CHECK amount > 0` | `transactions`, `accounting_journals`, `cash_transfers`, `withdrawal_authorizations` |
+| `CHECK balance >= 0` | `customers` |
+| `CHECK` posisi jurnal | `position IN ('debit','credit')` |
+| `CHECK` keterkaitan koreksi | Koreksi wajib merujuk transaksi asli dan supervisor |
+| Kunci unik | Satu debit dan satu kredit per transaksi (`transaction_id`, `position`); satu koreksi per transaksi |
+
+## Membaca jejak audit
+
+Admin dan supervisor punya akses baca ke log transaksi dan jurnal. Tidak ada endpoint
+yang menulis transaksi atau jurnal.
+
+| Kebutuhan | Endpoint |
+| --- | --- |
+| Log transaksi (terbaru dulu) | `GET /api/audit/transactions` |
+| Satu transaksi dengan jurnal, tautan koreksi, dan otorisasi penarikan | `GET /api/audit/transactions/{id}` |
+| Baris jurnal | `GET /api/audit/journals` |
+| Neraca saldo | `GET /api/audit/journals/summary` |
+| PDF jejak audit / laporan jurnal | `GET /api/audit/transactions/export`, `GET /api/audit/journals/export` |
+
+Filter bersama: rentang tanggal (`from`, `to`, tanggal atau tanggal-jam), nama atau
+username teller, nama/nomor rekening/NIS nasabah, jenis transaksi, serta id teller dan
+nasabah. Lihat [API Audit & laporan](/api/audit-and-reports/).
+
+Detail transaksi menampilkan siapa yang mengotorisasi koreksi (`authorized_by`),
+koreksi mana yang membatalkannya (`corrected_by`), dan untuk penarikan yang disetujui
+di aplikasi, `withdrawal_authorization` (`{ id, method: "mobile", approved_at }`).
+
+<Aside type="note" title="Tidak ada daftar otorisasi untuk admin/supervisor">
+Riwayat permintaan penarikan tidak punya daftar khusus untuk admin atau supervisor.
+Otorisasinya terlihat di detail transaksi audit (keputusan D7 di
+`docs/PIN_VERIFICATION.md`).
+</Aside>

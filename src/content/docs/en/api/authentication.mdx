@@ -1,0 +1,108 @@
+---
+title: Authentication
+description: The single login endpoint for all four actors, the current user, and logout.
+sidebar:
+  order: 2
+sources:
+  - routes/api.php
+  - app/Http/Controllers/API/LoginController.php
+  - app/Http/Requests/Auth
+  - docs/API.md
+  - docs/AUTH.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Endpoint from '../../../../components/Endpoint.astro';
+
+The full flow and rules are in [Login and sessions](/en/workflows/authentication/).
+
+## Login
+
+<Endpoint method="POST" path="/api/login" limit="5/min per username/identifier + IP" />
+
+The single entry point for all four roles. Send **one** set of credentials;
+`data.actor` tells the client which portal to open.
+
+| Field | Rules |
+| --- | --- |
+| `username`, `password` | Staff: required together. `username` max 255 |
+| `identifier`, `pin` | Customer: NIS or account number (max 50) and a PIN of exactly 6 digits |
+
+If `username` is filled the staff login runs; otherwise, if `identifier` is filled,
+the customer login runs; if both are empty, `422`.
+
+```http
+POST /api/login
+Accept: application/json
+Content-Type: application/json
+
+{ "username": "teller", "password": "password" }
+```
+
+```json title="200 (staff) — example from the demo database"
+{
+  "data": {
+    "actor": "staff",
+    "token": "<token>",
+    "token_type": "Bearer",
+    "user": {
+      "id": 3, "username": "teller", "full_name": "Teller Loket 1",
+      "class": "XI AK 1", "phone": "081200000001", "role": "teller", "is_active": true,
+      "created_at": "2026-10-27T13:10:33.000000Z", "updated_at": "2026-10-27T13:10:33.000000Z"
+    }
+  }
+}
+```
+
+**200 (customer):** `actor` is `"customer"` and `data.customer` is a
+[Customer](/en/api/admin/#customer-object) object.
+
+**422:** wrong credentials (`Username atau password salah.` /
+`NIS/nomor rekening atau PIN salah.`), blocked staff, closed account, locked PIN, or no
+credentials:
+
+```json
+{
+  "message": "Isi username dan password (staf) atau NIS/nomor rekening dan PIN (nasabah).",
+  "errors": { "username": ["Isi username dan password (staf) atau NIS/nomor rekening dan PIN (nasabah)."] }
+}
+```
+
+A wrong PIN counts toward the shared PIN lock, but login does not reveal the remaining
+attempts. Once locked, the message is
+`Terlalu banyak percobaan PIN salah. Coba lagi pukul 09:15.` (local time).
+
+### Aliases
+
+<Endpoint method="POST" path="/api/staff/login" limit="5/min per username/identifier + IP" />
+
+<Endpoint method="POST" path="/api/customer/login" limit="5/min per username/identifier + IP" />
+
+Aliases that accept only their own kind of body. Use `POST /api/login` only
+(note I2).
+
+## Staff
+
+<Endpoint method="GET" path="/api/staff/me" roles="admin,supervisor,teller" />
+
+The logged-in staff member: `{ "data": Staff }`. Call it when the app loads to
+validate a stored token.
+
+<Endpoint method="POST" path="/api/staff/logout" roles="admin,supervisor,teller" />
+
+Revokes the token used: `200 { "message": "Berhasil keluar." }`.
+
+## Customer
+
+<Endpoint method="GET" path="/api/customer/me" roles="customer" />
+
+The logged-in customer: `{ "data": Customer }` with their major.
+
+<Endpoint method="POST" path="/api/customer/logout" roles="customer" />
+
+Revokes the token used: `200 { "message": "Berhasil keluar." }`.
+
+<Aside type="note" title="Tokens">
+Tokens last 480 minutes from creation (absolute). The login response does not include
+the expiry time and there is no refresh endpoint. An expired token returns `401`.
+</Aside>

@@ -1,0 +1,52 @@
+---
+title: Customer
+description: What the customer (student) can and cannot do, with the endpoints they use.
+sidebar:
+  order: 4
+sources:
+  - docs/RBAC.md
+  - docs/PIN_VERIFICATION.md
+  - routes/api.php
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+**Model:** `App\Models\Customer` (`customers` table, no `role` value). **Client:**
+customer mobile app. **Logs in with:** NIS or account number + 6-digit PIN.
+
+Every customer endpoint is scoped to the token's account. Parameters such as
+`?customer_id=` are ignored.
+
+## Can
+
+| Capability | Endpoints |
+| --- | --- |
+| View their own profile | `GET /api/customer/me` |
+| View their balance with the minimum balance | `GET /api/customer/balance` |
+| View their statement with filters, and one transaction | `GET /api/customer/transactions`, `/{id}` |
+| Download their own statement PDF | `GET /api/customer/statement/export` |
+| Show a digital card (QR payload) for the teller to scan | `GET /api/customer/card` |
+| Change their PIN | `POST /api/customer/pin` |
+| View, approve (with the PIN) or reject withdrawal requests for their own account | `/api/customer/withdrawal-authorizations…` |
+| Log out | `POST /api/customer/logout` |
+
+## Cannot
+
+- **Start a withdrawal or move money** in any way. Customers only approve or reject a
+  withdrawal a teller started.
+- See other customers, staff data, journals or internal reports.
+- Use any staff endpoint (`403`).
+
+| Account status | Log in | View data | Transact through a teller |
+| --- | :-: | :-: | :-: |
+| `active` | ✓ | ✓ | ✓ |
+| `suspended` | ✓ | ✓ | — |
+| `inactive` (graduated) | — | — | — |
+
+<Aside type="caution" title="Shared PIN lock">
+Three wrong PINs in a row, at login, withdrawal approval or PIN change, lock the PIN
+for 15 minutes everywhere. There is no self-service forgot-PIN; the admin resets it.
+</Aside>
+
+Related: [PIN approval](/en/workflows/withdrawal-pin-authorization/) ·
+[PIN verification](/en/concepts/pin-verification/) · [Customer API](/en/api/customer/)

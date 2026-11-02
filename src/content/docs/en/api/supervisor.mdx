@@ -1,0 +1,132 @@
+---
+title: Supervisor
+description: Endpoints for reviewing daily reports (approve, hold, reject) and the vault ledger.
+sidebar:
+  order: 6
+sources:
+  - routes/api.php
+  - app/Http/Controllers/API/Supervisor
+  - app/Services/DailyReportService.php
+  - app/Http/Resources/DailyReportResource.php
+  - docs/API.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Endpoint from '../../../../components/Endpoint.astro';
+
+Every endpoint on this page needs a **supervisor** token. Reports are reviewed one at a
+time (no bulk approval). Flow: [Shifts and daily reports](/en/workflows/shift-management/#4-supervisor-review).
+
+## Daily reports
+
+<Endpoint method="GET" path="/api/supervisor/daily-reports" roles="supervisor" />
+
+[DailyReport](#dailyreport-object) list with `teller` and `supervisor`, newest date
+first (default `per_page` 15). Open shifts show live totals.
+
+| Query | Description |
+| --- | --- |
+| `status` | `open`, `submitted`, `on_hold`, `approved`, `rejected` |
+| `date` | `YYYY-MM-DD` |
+| `teller_id` | Filter by teller (see `GET /api/staff?role=teller`) |
+
+<Endpoint method="GET" path="/api/supervisor/daily-reports/{dailyReport}" roles="supervisor" />
+
+One report with its cash counts, `cash_transfer` and a top-level `transactions` list, to
+compare with the slips and the physical cash.
+
+<Endpoint method="GET" path="/api/supervisor/daily-reports/{dailyReport}/export" roles="supervisor" />
+
+The same PDF as the teller's, with the same lock (only for `submitted`, `on_hold`,
+`approved`).
+
+<Endpoint method="POST" path="/api/supervisor/daily-reports/{dailyReport}/approve" roles="supervisor" />
+
+`note` optional (max 1000). Allowed from `submitted` or `on_hold`. **Approval records
+the counted cash moving from the teller's drawer to the main vault** and is final.
+
+```json title="200 — example from the demo database (shortened)"
+{
+  "data": {
+    "id": 2, "report_date": "2026-10-27", "status": "approved",
+    "opening_balance": 150000, "transaction_count": 5, "total_deposit": 132000, "total_withdrawal": 30000,
+    "system_balance": 252000, "physical_balance": 252000, "difference": 0,
+    "reviewed_at": "2026-10-27T13:10:39.000000Z", "supervisor_note": "Sesuai, kas diterima di brankas",
+    "teller": { "id": 3, "full_name": "Teller Loket 1", "class": "XI AK 1" },
+    "supervisor": { "id": 2, "full_name": "Supervisor Bank Mini" },
+    "cash_transfer": { "id": 2, "amount": 252000, "transferred_at": "2026-10-27T13:10:39.000000Z" },
+    "...": "other DailyReport fields"
+  }
+}
+```
+
+<Endpoint method="POST" path="/api/supervisor/daily-reports/{dailyReport}/hold" roles="supervisor" />
+
+`note` **required**. From `submitted` to `on_hold` (pending, e.g. waiting for an
+original slip). The teller can still open the next day's shift.
+
+<Endpoint method="POST" path="/api/supervisor/daily-reports/{dailyReport}/reject" roles="supervisor" />
+
+`note` **required**. From `submitted` or `on_hold` to `rejected`: the shift reopens so
+the teller can correct and close it again. Refused while the teller is running another
+shift (hold it instead).
+
+**422** for any decision on a report that is not awaiting review:
+`Laporan berstatus "disetujui" tidak dapat diproses.`
+
+## Vault ledger
+
+<Endpoint method="GET" path="/api/supervisor/cash-transfers" roles="supervisor" />
+
+Read-only list of cash moved from teller drawers to the main vault (created by
+approvals), newest first, with `total_amount` for the current filter.
+
+| Query | Description |
+| --- | --- |
+| `from`, `to` | `YYYY-MM-DD` |
+| `teller_id` | Filter by teller |
+
+```json title="200 — example from the demo database (shortened)"
+{
+  "data": [
+    {
+      "id": 2, "source": "teller_drawer", "destination": "main_vault",
+      "amount": 252000, "transferred_at": "2026-10-27T13:10:39.000000Z",
+      "daily_report": { "id": 2, "report_date": "2026-10-27", "teller": { "id": 3, "full_name": "Teller Loket 1" } },
+      "approved_by": { "id": 2, "full_name": "Supervisor Bank Mini" }
+    }
+  ],
+  "meta": { "current_page": 1, "per_page": 15, "total": 2 },
+  "total_amount": 2602000
+}
+```
+
+<Endpoint method="GET" path="/api/supervisor/cash-transfers/{cashTransfer}" roles="supervisor" />
+
+One transfer with its report and approver.
+
+## DailyReport object
+
+| Field | Notes |
+| --- | --- |
+| `id`, `report_date`, `status` | One per teller per day |
+| `opening_balance`, `opened_at` | Opening balance |
+| `transaction_count`, `total_deposit`, `total_withdrawal` | Net of corrections; live while open |
+| `system_balance` | `opening_balance + total_deposit − total_withdrawal` |
+| `physical_balance`, `difference` | Counted cash and `physical − system` (0 once closed); null while a shift is `open`. A `rejected` shift keeps the previous count until it is closed again (L3) |
+| `submitted_at`, `reviewed_at`, `supervisor_note` | |
+| `teller` | `{ id, full_name, class }`, on supervisor endpoints |
+| `supervisor` | `{ id, full_name }` of the reviewer, or null |
+| `opening_counts`, `closing_counts` | `[{ denomination, quantity, subtotal }]`, largest note first |
+| `cash_transfer` | `{ id, amount, transferred_at }` after approval, or null |
+
+### CashTransfer object
+
+`id`, `source` (`teller_drawer`), `destination` (`main_vault`), `amount`,
+`transferred_at`, `daily_report` `{ id, report_date, teller }`, `approved_by`
+`{ id, full_name }`.
+
+<Aside type="note" title="Not available">
+Moving cash from the vault to a teller is not available; a shift's opening balance is
+simply counted by the teller.
+</Aside>

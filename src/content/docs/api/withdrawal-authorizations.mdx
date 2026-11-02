@@ -1,0 +1,206 @@
+---
+title: Otorisasi penarikan
+description: Endpoint persetujuan penarikan di aplikasi (Mode A) untuk sisi teller dan sisi nasabah.
+sidebar:
+  order: 5
+sources:
+  - routes/api.php
+  - app/Http/Controllers/API/Teller/WithdrawalAuthorizationController.php
+  - app/Http/Controllers/API/Customer/WithdrawalAuthorizationController.php
+  - app/Http/Resources/WithdrawalAuthorizationResource.php
+  - app/Http/Resources/CustomerWithdrawalAuthorizationResource.php
+  - docs/API.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Endpoint from '../../../components/Endpoint.astro';
+
+Teller memulai penarikan, nasabah menyetujuinya **di aplikasi dengan PIN**, teller
+menyelesaikannya. Butuh pengaturan `withdrawal_verification` bernilai `mobile`
+(bawaan) atau `both`. Alur dan diagram: [Persetujuan PIN di aplikasi](/workflows/withdrawal-pin-authorization/).
+
+```text
+teller   POST /teller/withdrawal-authorizations                → pending   (120 detik untuk menyetujui)
+nasabah  POST /customer/withdrawal-authorizations/{id}/approve → approved  (120 detik untuk menyelesaikan)
+teller   POST /teller/withdrawal-authorizations/{id}/complete  → consumed + Transaction
+```
+
+## Aturan umum
+
+- `{id}` adalah ULID permintaan (`data.id`). Integer key tidak pernah diekspos.
+- Permintaan milik teller atau nasabah lain menjawab **404**.
+- Setiap respons memuat `server_time` untuk hitung mundur ke `expires_at` /
+  `approval_expires_at`.
+- Hanya `pending` dan `approved` yang "terbuka". Satu permintaan terbuka per teller dan
+  per nasabah.
+- Polling, bukan push: teller memeriksa `GET …/{id}` (setiap 2 detik cukup); aplikasi
+  memeriksa daftarnya saat terbuka.
+
+**422** jika langkah tidak mungkin dalam status saat ini; `status` disertakan jika
+pesannya tentang permintaan tertentu:
+
+```json
+{ "message": "Permintaan penarikan ini berstatus \"selesai\" dan tidak dapat diproses.", "status": "consumed" }
+```
+
+## Sisi teller
+
+<Endpoint method="POST" path="/api/teller/withdrawal-authorizations" roles="teller" limit="10/menit per teller" />
+
+| Field | Aturan |
+| --- | --- |
+| `account_number` | Wajib, rekening yang ada dan tidak ditutup |
+| `amount` | Wajib, bilangan bulat 1 – 100.000.000 |
+
+Memeriksa semua yang dibutuhkan penarikan **sebelum** nasabah ditanya: shift terbuka
+untuk hari ini, rekening `active`, PIN tidak diblokir, `saldo − nominal ≥ min_balance`,
+tidak ada permintaan terbuka lain milik teller ini, dan tidak ada permintaan terbuka
+untuk nasabah ini. Tidak ada uang yang berpindah.
+
+```json title="201 — contoh dari basis data demo"
+{
+  "data": {
+    "id": "01M6AMM4CNBR52V8MKC0JEDPJM", "status": "pending",
+    "status_label": "Menunggu persetujuan nasabah",
+    "amount": 50000, "amount_in_words": "lima puluh ribu rupiah",
+    "customer": { "id": 1, "account_number": "RPL-2026-001", "full_name": "Budi Santoso", "class": "X" },
+    "daily_report_id": 2,
+    "created_at": "2026-11-01T04:07:01.000000Z", "expires_at": "2026-11-01T04:09:01.000000Z",
+    "approved_at": null, "approval_expires_at": null, "rejected_at": null,
+    "cancelled_at": null, "cancel_reason": null, "consumed_at": null, "transaction_id": null,
+    "server_time": "2026-11-01T04:07:01.782795Z"
+  }
+}
+```
+
+**422** selain error setoran (shift, rekening ditangguhkan), saldo minimum, dan blokir
+PIN:
+
+| Pesan | Penyebab |
+| --- | --- |
+| `Masih ada permintaan penarikan yang belum selesai. Selesaikan atau batalkan terlebih dahulu.` | Teller ini sudah punya permintaan terbuka |
+| `Nasabah ini masih memiliki permintaan penarikan yang belum selesai.` | Nasabah sudah punya permintaan terbuka (dari teller mana pun) |
+| `Persetujuan penarikan melalui aplikasi nasabah sedang tidak diaktifkan.` | Pengaturan `terminal` |
+
+<Endpoint method="GET" path="/api/teller/withdrawal-authorizations" roles="teller" limit="120/menit per aktor" />
+
+<Endpoint method="GET" path="/api/teller/withdrawal-authorizations/{withdrawalAuthorization}" roles="teller" limit="120/menit per aktor" />
+
+Daftar berisi permintaan milik teller yang dibuat hari ini, terbaru dulu (dipaginasi,
+`per_page` bawaan 15). `?status=open` hanya mengembalikan yang terbuka, untuk
+melanjutkan layar tunggu setelah halaman dimuat ulang. `GET …/{id}` adalah endpoint
+polling; mengembalikan objek yang sama dengan status terkini (kedaluwarsa diterapkan
+saat dibaca).
+
+<Endpoint method="POST" path="/api/teller/withdrawal-authorizations/{withdrawalAuthorization}/cancel" roles="teller" limit="120/menit per aktor" />
+
+`pending` atau `approved` → `cancelled` (`cancel_reason: "teller"`). **200** dengan
+permintaannya. **422** jika sudah selesai.
+
+<Endpoint method="POST" path="/api/teller/withdrawal-authorizations/{withdrawalAuthorization}/complete" roles="teller" limit="120/menit per aktor" />
+
+Menjalankan penarikan yang disetujui untuk rekening dan nominal **yang tersimpan di
+permintaan** (tidak ada yang diambil dari body). Dalam satu transaksi database: lock
+teller dan shift, lock permintaan (harus `approved`, belum melewati
+`approval_expires_at`, shift sama), lock nasabah, periksa ulang status dan saldo
+minimum, catat penarikan, tandai permintaan `consumed`, tulis jurnal. Jika gagal,
+semuanya dibatalkan; permintaan tetap `approved` dan dapat dicoba lagi sampai
+kedaluwarsa.
+
+**201** [Transaction](/api/teller/#objek-transaction) pada panggilan pertama; **200**
+dengan transaksi yang sama jika dipanggil lagi (aman diulang setelah timeout, tanpa
+`Idempotency-Key`):
+
+```json title="201 — contoh dari basis data demo"
+{
+  "data": {
+    "id": 4, "type": "withdrawal", "type_label": "Tarik tunai",
+    "amount": 50000, "amount_in_words": "lima puluh ribu rupiah",
+    "balance_before": 500000, "balance_after": 450000,
+    "created_at": "2026-11-01T04:07:02.000000Z", "daily_report_id": 2,
+    "corrects_transaction_id": null, "note": null,
+    "withdrawal_authorization": { "id": "01M6AMM4CNBR52V8MKC0JEDPJM", "method": "mobile", "approved_at": "2026-11-01T04:07:02.000000Z" },
+    "customer": { "id": 1, "account_number": "RPL-2026-001", "full_name": "Budi Santoso" }
+  }
+}
+```
+
+**422:** belum disetujui (`status: "pending"`), sudah selesai, persetujuan kedaluwarsa
+(`Persetujuan nasabah sudah kedaluwarsa. Buat permintaan penarikan baru.`), shift
+ditutup atau berbeda (`Permintaan penarikan ini dibuat pada shift lain.`), atau saldo
+tidak lagi mencukupi.
+
+## Sisi nasabah
+
+<Endpoint method="GET" path="/api/customer/withdrawal-authorizations" roles="customer" limit="120/menit per aktor" />
+
+<Endpoint method="GET" path="/api/customer/withdrawal-authorizations/{withdrawalAuthorization}" roles="customer" limit="120/menit per aktor" />
+
+Permintaan **terbuka** milik nasabah (tidak dipaginasi), atau satu permintaan milik
+sendiri dalam status apa pun. `balance_after` adalah pratinjau saldo setelah penarikan
+(`null` setelah permintaan tidak lagi terbuka).
+
+```json title="200 — contoh dari basis data demo"
+{
+  "data": [
+    {
+      "id": "01M6AMM4CNBR52V8MKC0JEDPJM", "status": "pending",
+      "status_label": "Menunggu persetujuan nasabah",
+      "amount": 50000, "amount_in_words": "lima puluh ribu rupiah",
+      "account_number": "RPL-2026-001", "balance": 500000, "balance_after": 450000,
+      "teller": { "full_name": "Teller Loket 1" },
+      "created_at": "2026-11-01T04:07:01.000000Z", "expires_at": "2026-11-01T04:09:01.000000Z",
+      "approved_at": null, "approval_expires_at": null, "consumed_at": null,
+      "server_time": "2026-11-01T04:07:01.909918Z"
+    }
+  ]
+}
+```
+
+<Endpoint method="POST" path="/api/customer/withdrawal-authorizations/{withdrawalAuthorization}/approve" roles="customer" limit="5/menit per nasabah" />
+
+| Field | Aturan |
+| --- | --- |
+| `pin` | Wajib, tepat 6 digit |
+
+Memeriksa PIN dengan penghitung bersama, lalu `pending` → `approved`
+(`approval_expires_at` = sekarang + 120 detik). **200** dengan permintaannya
+(`status: "approved"`). PIN tidak pernah disimpan atau dikembalikan.
+
+**422:** PIN salah (permintaan tetap `pending` dan dapat disetujui dengan PIN yang
+benar):
+
+```json
+{ "message": "PIN salah. Sisa percobaan: 2.", "remaining_attempts": 2, "pin_locked_until": null }
+```
+
+Juga **422** jika PIN diblokir (`remaining_attempts: 0`, `pin_locked_until` terisi),
+permintaan tidak lagi `pending` (`status` disertakan), atau rekening ditangguhkan.
+Token staf mendapat **403**.
+
+<Endpoint method="POST" path="/api/customer/withdrawal-authorizations/{withdrawalAuthorization}/reject" roles="customer" limit="5/menit per nasabah" />
+
+`pending` → `rejected`. **200** dengan permintaannya. **422** jika tidak lagi `pending`.
+
+## Objek permintaan
+
+| Field | Sisi | Keterangan |
+| --- | --- | --- |
+| `id` | Keduanya | ULID (kolom `public_id`) |
+| `status`, `status_label` | Keduanya | Lihat status di atas; label berbahasa Indonesia |
+| `amount`, `amount_in_words` | Keduanya | Nominal yang terikat ke permintaan |
+| `customer` | Teller | `{ id, account_number, full_name, class }` |
+| `account_number`, `balance`, `balance_after` | Nasabah | `balance_after` pratinjau, `null` jika tidak terbuka |
+| `teller` | Nasabah | `{ full_name }` |
+| `daily_report_id` | Teller | Shift tempat permintaan dibuat |
+| `created_at`, `expires_at` | Keduanya | Nasabah harus memutuskan sebelum `expires_at` |
+| `approved_at`, `approval_expires_at` | Keduanya | Teller harus menyelesaikan sebelum `approval_expires_at` |
+| `rejected_at`, `cancelled_at`, `cancel_reason` | Teller | `cancel_reason`: `teller`, `shift_closed` |
+| `consumed_at` | Keduanya | Saat penarikan dicatat |
+| `transaction_id` | Teller | Transaksi penarikan (unik) |
+| `server_time` | Keduanya | Jam server, untuk hitung mundur |
+
+<Aside type="danger" title="Tidak ada PIN di objek ini">
+Tabel `withdrawal_authorizations` tidak punya kolom PIN, dan tidak ada respons yang
+memuat PIN.
+</Aside>

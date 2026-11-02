@@ -1,0 +1,101 @@
+---
+title: API overview
+description: Conventions of the Bank Mini REST API, headers, money and time formats, pagination, enums, rate limits, and the full list of 67 endpoints.
+sidebar:
+  order: 1
+  label: Overview
+sources:
+  - routes/api.php
+  - docs/API.md
+  - docs/API_SUMMARY.json
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import EndpointIndex from '../../../../components/EndpointIndex.astro';
+
+The backend provides **67 JSON routes** under `/api` (66 distinct paths; `PUT|PATCH`
+share one route). The list at the bottom of this page is generated from
+`docs/API_SUMMARY.json`, which is built from `php artisan route:list`.
+
+## Conventions
+
+| Item | Rule |
+| --- | --- |
+| Base URL | `http://localhost:8000/api` in development (the app's host + `/api`) |
+| Headers | Always `Accept: application/json`; `Content-Type: application/json` with a body; `Authorization: Bearer <token>` everywhere except login |
+| Money | Integer Rupiah, no decimals (`50000` = Rp50.000) |
+| Timestamps | ISO 8601 in UTC, e.g. `2026-10-27T13:10:36.000000Z` (= 20:10 WIB). Convert to local time in the client |
+| Dates | `YYYY-MM-DD` in the school's timezone (Asia/Jakarta). Audit filters also accept `YYYY-MM-DD HH:MM` |
+| Single objects | Wrapped in `data` |
+| Lists | A `data` array plus `links` and `meta` |
+| PDFs | `Content-Type: application/pdf` and `Content-Disposition: attachment; filename=...` |
+| Message language | Business-rule messages are Indonesian; field validation messages are Laravel's English defaults |
+| Secrets | Passwords, PINs and idempotency keys never appear in responses |
+
+<Aside type="note" title="About the examples in this reference">
+Example responses were captured from real requests against the **demo** database
+(seeder); names and amounts are fictitious. Long lists are shortened, and
+`"...": "..."` marks omitted fields. Tokens are written as `<token>`.
+</Aside>
+
+## Pagination
+
+Lists accept `?page=` (default 1) and `?per_page=` (1–100, clamped; the default differs
+per endpoint).
+
+```json
+{
+  "data": [ "..." ],
+  "links": { "first": "...?page=1", "last": "...?page=2", "prev": null, "next": "...?page=2" },
+  "meta": { "current_page": 1, "from": 1, "last_page": 2, "path": "...", "per_page": 15, "to": 15, "total": 22 }
+}
+```
+
+There are no sort parameters; each endpoint has a fixed order.
+
+## Enums
+
+| Field | Values |
+| --- | --- |
+| Staff `role` | `admin`, `supervisor`, `teller` |
+| Customer `account_status` | `active` (can transact), `suspended` (can log in and view, cannot transact), `inactive` (graduated: cannot log in, soft deleted) |
+| Customer `class` / `group` | `X`, `XI`, `XII` / `1`–`4` |
+| Transaction `type` | `deposit`, `withdrawal`, `deposit_correction`, `withdrawal_correction` |
+| Journal `account_code` | `101` (Kas), `201` (Tabungan Nasabah) |
+| Journal `position` | `debit`, `credit` |
+| Daily report `status` | `open`, `submitted`, `on_hold`, `approved`, `rejected` |
+| `qr_scanner_mode` | `webcam`, `usb`, `disabled` |
+| `withdrawal_verification` | `mobile`, `terminal`, `both` |
+| Withdrawal authorization `status` | `pending`, `approved`, `consumed`, `rejected`, `cancelled`, `expired` |
+| Cash denominations | `100000`, `50000`, `20000`, `10000`, `5000`, `2000`, `1000`, `500`, `200`, `100` |
+
+## Rate limits
+
+| Limiter | Routes | Limit | Key |
+| --- | --- | --- | --- |
+| `login` | `POST /login`, `/staff/login`, `/customer/login` | 5 per minute | username/identifier (lowercased) + IP |
+| `throttle:10,1` | `POST /teller/transactions/{id}/correct` | 10 per minute | teller |
+| `withdrawal-authorization-create` | `POST /teller/withdrawal-authorizations` | 10 per minute | teller |
+| `withdrawal-authorization-poll` | list/show/cancel/complete (teller), list/show (customer) | 120 per minute | actor |
+| `withdrawal-authorization-decide` | approve/reject (customer) | 5 per minute | customer |
+
+Going over a limit returns `429 {"message":"Too Many Attempts."}`. The authorization
+limiter keys include the actor type, so a teller and a customer with the same numeric
+id never share a counter.
+
+## Reference pages
+
+| Page | Content |
+| --- | --- |
+| [Authentication](/en/api/authentication/) | Single login gateway, own profile, logout |
+| [Admin](/en/api/admin/) | Reference data, settings, staff management, customer accounts |
+| [Teller](/en/api/teller/) | Shift, customer lookup, deposits, withdrawals (PIN at the counter), transactions, corrections, shift history |
+| [Withdrawal authorizations](/en/api/withdrawal-authorizations/) | Withdrawal approval in the app (teller and customer side) |
+| [Supervisor](/en/api/supervisor/) | Daily report review, vault ledger |
+| [Audit & reports](/en/api/audit-and-reports/) | Transaction log, journal, trial balance, PDFs |
+| [Customer](/en/api/customer/) | Balance, statement, card, PIN change |
+| [Errors](/en/api/errors/) | Error format, status codes, extra fields |
+
+## All endpoints
+
+<EndpointIndex />

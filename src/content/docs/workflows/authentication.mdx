@@ -1,0 +1,141 @@
+---
+title: Login dan sesi
+description: Alur login satu pintu untuk staf dan nasabah, penggunaan token, masa berlaku, logout, dan respons saat akses ditolak.
+sidebar:
+  order: 1
+sources:
+  - app/Http/Controllers/API/LoginController.php
+  - app/Http/Controllers/API/Staff/AuthController.php
+  - app/Http/Controllers/API/Customer/AuthController.php
+  - app/Providers/AppServiceProvider.php
+  - docs/AUTH.md
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+import Mermaid from '../../../components/Mermaid.astro';
+
+## Ringkasan
+
+| | |
+| --- | --- |
+| Aktor | Semua staf dan nasabah |
+| Endpoint | `POST /api/login` (alias: `/api/staff/login`, `/api/customer/login`) |
+| Mekanisme | Token akses pribadi Laravel Sanctum (bearer), disimpan ter-hash di `personal_access_tokens` |
+| Masa berlaku | 480 menit (8 jam) sejak dibuat, absolut. Tidak ada endpoint refresh |
+| Cookie / session | Tidak dipakai |
+
+## Alur login
+
+<Mermaid
+	caption="Isi body menentukan login staf atau nasabah."
+	chart={`flowchart TD
+  A["POST /api/login"] --> RL{"Rate limit<br/>5/menit per identitas + IP"}
+  RL -- "terlampaui" --> E429["429 Too Many Attempts."]
+  RL -- "ok" --> B{"username diisi?"}
+  B -- "ya" --> S["Login staf<br/>bcrypt + is_active"]
+  B -- "tidak" --> C{"identifier diisi?"}
+  C -- "ya" --> N["Login nasabah<br/>PinService::verify (blokir bersama)"]
+  C -- "tidak" --> E422["422 isi username dan password<br/>atau NIS/rekening dan PIN"]
+  S -- "berhasil" --> T1["200 actor: staff · token · user"]
+  N -- "berhasil" --> T2["200 actor: customer · token · customer"]
+  S -- "gagal" --> F1["422 errors.username"]
+  N -- "gagal" --> F2["422 errors.identifier"]`}
+/>
+
+<Steps>
+
+1. Klien mengirim **salah satu** set kredensial:
+
+   ```json title="Staf"
+   { "username": "teller", "password": "password" }
+   ```
+
+   ```json title="Nasabah (NIS atau nomor rekening)"
+   { "identifier": "20260001", "pin": "123456" }
+   ```
+
+2. Backend memeriksa kredensial. Untuk nasabah, nomor rekening dicoba lebih dulu, lalu
+   NIS; keduanya mengarah ke penghitung PIN yang sama.
+
+3. Jika berhasil, backend membuat token dan mengembalikannya **sekali saja**:
+
+   ```json title="200 — contoh respons dari basis data demo (token dipendekkan)"
+   {
+     "data": {
+       "actor": "staff",
+       "token": "3|FsAYFafTXVEvVS53…",
+       "token_type": "Bearer",
+       "user": { "id": 3, "username": "teller", "full_name": "Teller Loket 1", "role": "teller", "is_active": true }
+     }
+   }
+   ```
+
+   Untuk nasabah, `actor` bernilai `"customer"` dan profilnya ada di `data.customer`.
+
+4. Klien membuka portal sesuai `data.actor`, lalu `data.user.role` untuk staf.
+
+</Steps>
+
+## Penolakan login (`422`)
+
+| Pesan | Penyebab |
+| --- | --- |
+| `Username atau password salah.` | Username tidak dikenal atau password salah |
+| `Akun staf ini sudah dinonaktifkan.` | Password benar tetapi staf diblokir |
+| `NIS/nomor rekening atau PIN salah.` | Identifier tidak dikenal, PIN salah, atau rekening sudah ditutup. Sisa percobaan **tidak** ditampilkan |
+| `Terlalu banyak percobaan PIN salah. Coba lagi pukul HH:MM.` | PIN diblokir (3 kali salah berturut-turut di mana pun). Jam lokal |
+| `Rekening ini sudah tidak aktif.` | Rekening `inactive` yang tidak di-soft delete; hanya muncul setelah PIN benar (praktis tidak terjadi lewat alur API) |
+| `Isi username dan password (staf) atau NIS/nomor rekening dan PIN (nasabah).` | Tidak ada set kredensial yang dikirim |
+
+Rekening yang **ditangguhkan** tetap dapat login.
+
+## Memakai token
+
+```http
+GET /api/teller/shift
+Accept: application/json
+Authorization: Bearer <token>
+```
+
+Pada setiap permintaan, pemilik token dibaca ulang dari database. Memblokir staf,
+mengubah peran, atau menutup rekening langsung berlaku.
+
+| Aktor | Profil sendiri | Logout |
+| --- | --- | --- |
+| Staf | `GET /api/staff/me` | `POST /api/staff/logout` |
+| Nasabah | `GET /api/customer/me` | `POST /api/customer/logout` |
+
+Logout hanya mencabut token yang dipakai untuk permintaan itu; perangkat lain tetap
+masuk. Token juga dicabut server saat admin memblokir atau menghapus staf, atau
+menutup rekening nasabah.
+
+## Saat akses ditolak
+
+| Status | Pesan | Arti | Tindakan klien |
+| --- | --- | --- | --- |
+| `401` | `Unauthenticated.` | Token tidak ada, salah, dicabut, atau kedaluwarsa | Hapus token, tampilkan login |
+| `403` | `Fitur ini khusus untuk staf bank.` | Token nasabah di endpoint staf | Hapus token, tampilkan login |
+| `403` | `Fitur ini khusus untuk nasabah.` | Token staf di endpoint nasabah | Hapus token, tampilkan login |
+| `403` | `Akun staf ini sudah dinonaktifkan.` | Staf diblokir saat sedang masuk | Hapus token, tampilkan login dengan pesan |
+| `403` | `Rekening ini sudah tidak aktif.` | Rekening nasabah ditutup | Hapus token, tampilkan login |
+| `403` | `Peran Anda tidak memiliki akses ke fitur ini.` | Peran staf salah untuk endpoint itu | Kembali ke login (rubrik UKK 3.2) |
+
+Route API tidak pernah me-redirect; tamu selalu mendapat `401` dalam JSON.
+
+## Penyimpanan token di klien
+
+<Aside type="tip" title="Rekomendasi dari dokumentasi backend">
+- **Web staf:** simpan di memori dan `sessionStorage` (hilang saat tab ditutup), cocok
+  untuk komputer loket bersama. Validasi ulang dengan `GET /api/staff/me` saat
+  aplikasi dibuka.
+- **Expo:** simpan dengan `expo-secure-store` (Keychain / Android Keystore), bukan
+  `AsyncStorage`. Jangan pernah menyimpan PIN.
+</Aside>
+
+## Yang belum tersedia
+
+Refresh token atau sesi bergeser · pilihan "ingat saya" · lupa password atau PIN ·
+staf mengganti password sendiri · melihat atau mencabut sesi di perangkat lain ·
+autentikasi dua faktor.
+
+Endpoint lengkap: [API Autentikasi](/api/authentication/).

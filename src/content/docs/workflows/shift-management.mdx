@@ -1,0 +1,149 @@
+---
+title: Shift dan laporan harian
+description: Membuka shift dengan hitung kas, menutup shift dengan rekonsiliasi uang fisik, dan pemeriksaan laporan harian oleh supervisor sampai kas pindah ke brankas.
+sidebar:
+  order: 3
+sources:
+  - app/Services/DailyReportService.php
+  - app/Http/Controllers/API/Teller/ShiftController.php
+  - app/Http/Controllers/API/Supervisor/DailyReportController.php
+  - docs/WORKFLOWS.md
+  - docs/API.md
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+import Mermaid from '../../../components/Mermaid.astro';
+
+Teller bekerja di dalam **shift**: satu sesi kerja per hari yang sekaligus menjadi
+**laporan harian** (`daily_reports`). Setiap transaksi milik satu shift.
+
+## Status laporan
+
+<Mermaid
+	caption="Status laporan harian dan siapa yang mengubahnya."
+	chart={`stateDiagram-v2
+  direction LR
+  [*] --> open: teller membuka shift
+  open --> submitted: teller menutup (uang fisik = saldo sistem)
+  submitted --> approved: supervisor menyetujui
+  submitted --> on_hold: supervisor menahan (catatan wajib)
+  submitted --> rejected: supervisor menolak (catatan wajib)
+  on_hold --> approved: supervisor menyetujui
+  on_hold --> rejected: supervisor menolak
+  rejected --> submitted: teller menutup ulang
+  approved --> [*]
+  note right of approved
+    final · kas dipindah ke brankas
+  end note`}
+/>
+
+| Status | Arti | Teller dapat bertransaksi | Berikutnya |
+| --- | --- | --- | --- |
+| `open` | Shift berjalan | Ya, jika `report_date` hari ini | `submitted` |
+| `submitted` | Ditutup dengan uang yang cocok; menunggu supervisor | Tidak | `approved`, `on_hold`, `rejected` |
+| `on_hold` | Supervisor menunggu sesuatu (dijelaskan di catatan) | Tidak | `approved`, `rejected` |
+| `rejected` | Dikembalikan; shift aktif lagi untuk koreksi dan ditutup ulang | Ya, jika `report_date` hari ini; koreksi kapan saja | `submitted` |
+| `approved` | Final; kas sudah dipindah ke brankas | Tidak | — |
+
+Shift yang **aktif** adalah shift berstatus `open` atau `rejected`.
+
+## 1. Membuka shift
+
+| | |
+| --- | --- |
+| Endpoint | `POST /api/teller/shift/open` |
+| Prasyarat | Tidak ada shift aktif milik teller ini; belum ada shift bertanggal hari ini |
+| Input | Hitungan uang di laci per pecahan |
+| Efek database | Baris `daily_reports` (status `open`, `report_date` hari ini, `opening_balance` = Σ pecahan × jumlah); baris `cash_counts` tahap `opening` untuk jumlah > 0 |
+| Respons | `201` DailyReport dengan total 0 dan `opening_counts` |
+
+```json title="Body: hitungan per pecahan (Rp50.000 × 2 + Rp10.000 × 5 = Rp150.000)"
+{ "denominations": { "50000": 2, "10000": 5 } }
+```
+
+Pecahan yang diterima: `100000`, `50000`, `20000`, `10000`, `5000`, `2000`, `1000`,
+`500`, `200`, `100`. Jumlah per pecahan 0–100.000.
+
+| Pesan `422` | Penyebab |
+| --- | --- |
+| `Shift tanggal 2026-10-26 masih berjalan. Tutup shift tersebut terlebih dahulu.` | Ada shift lama yang belum ditutup |
+| `Shift hari ini sudah ditutup dan tidak dapat dibuka lagi.` | Shift hari ini sudah ditutup |
+
+`GET /api/teller/shift` mengembalikan shift aktif dengan **total langsung** dan
+transaksinya, plus `can_transact` (`true` jika `report_date` hari ini). Tanpa shift
+aktif: `{ "data": null, "can_transact": false, "closed_today": false }`.
+
+## 2. Bertransaksi
+
+Setor, tarik, dan koreksi hanya dapat dicatat di shift aktif. Setor dan tarik juga
+mensyaratkan shift bertanggal **hari ini**; shift dari hari sebelumnya hanya dapat
+ditutup.
+
+## 3. Menutup shift (penutupan kas)
+
+<Steps>
+
+1. Teller menghitung uang di laci per pecahan dan mengirim
+   `POST /api/teller/shift/close`.
+2. Backend mengunci teller dan shift, lalu menghitung total dari transaksi shift
+   (bersih dari koreksi):
+
+   ```text
+   saldo sistem = saldo awal + total setoran − total penarikan
+   ```
+
+3. Jika **uang fisik = saldo sistem**: snapshot total disimpan, status `submitted`,
+   hitungan penutupan lama diganti, dan permintaan penarikan yang masih terbuka di
+   shift ini dibatalkan (`cancel_reason: shift_closed`).
+4. Jika tidak cocok: **tidak ada yang disimpan**, shift tetap terbuka.
+
+</Steps>
+
+```json title="422 — uang fisik tidak cocok (contoh dari basis data demo)"
+{
+  "message": "Uang fisik kurang Rp2.000 dari saldo sistem. Periksa ulang hitungan dan slip; laporan tidak dapat ditutup atau dicetak sampai sesuai.",
+  "system_balance": 252000,
+  "physical_balance": 250000,
+  "difference": -2000
+}
+```
+
+Setelah ditutup, setor dan tarik untuk hari itu ditolak sampai supervisor menolak
+laporannya. Shift baru hanya dapat dibuka di tanggal berikutnya. PDF laporan harian
+(`GET /api/teller/daily-reports/{id}/export`) baru tersedia untuk laporan
+`submitted`, `on_hold`, dan `approved`.
+
+<Aside type="caution" title="L1 · Nominal ganjil membuat shift tidak dapat ditutup">
+Uang hanya dapat dihitung dalam pecahan ≥ Rp100. Transaksi seperti Rp150 membuat saldo
+sistem tidak mungkin dicocokkan sampai transaksi itu dikoreksi.
+</Aside>
+
+## 4. Pemeriksaan supervisor
+
+Supervisor memeriksa laporan **satu per satu** (tidak ada persetujuan massal).
+
+| Keputusan | Endpoint | Dari status | Catatan | Efek |
+| --- | --- | --- | --- | --- |
+| Setujui | `POST /api/supervisor/daily-reports/{id}/approve` | `submitted`, `on_hold` | Opsional | Final. Mencatat pemindahan kas dari laci teller ke brankas (`cash_transfers`, jumlah = `physical_balance`, jika > 0) |
+| Tahan | `POST /api/supervisor/daily-reports/{id}/hold` | `submitted` | Wajib | `on_hold`. Teller tetap dapat membuka shift hari berikutnya |
+| Tolak | `POST /api/supervisor/daily-reports/{id}/reject` | `submitted`, `on_hold` | Wajib | `rejected`: shift aktif lagi untuk dikoreksi dan ditutup ulang. Ditolak jika teller sedang menjalankan shift lain |
+
+Setiap keputusan mengunci laporannya. Pesan `422` yang mungkin muncul:
+`Laporan berstatus "disetujui" tidak dapat diproses.`, `Laporan ini sudah ditahan.`,
+`Teller sedang menjalankan shift lain…`, atau catatan yang tidak diisi.
+
+<Aside type="note" title="Keterbatasan L3 · Nilai lama pada shift yang ditolak">
+Setelah ditolak, shift yang dibuka kembali masih menampilkan `physical_balance`,
+`difference`, dan `closing_counts` dari hitungan sebelumnya sampai ditutup lagi.
+</Aside>
+
+## Buku brankas
+
+`GET /api/supervisor/cash-transfers` (filter `from`, `to`, `teller_id`, dengan
+`total_amount`) dan `GET /api/supervisor/cash-transfers/{id}` menampilkan kas yang
+pindah ke brankas. Hanya baca.
+
+Memindahkan kas dari brankas ke teller (misalnya modal awal) **belum tersedia**; saldo
+awal hanya dihitung oleh teller.
+
+Endpoint lengkap: [API Teller](/api/teller/) dan [API Supervisor](/api/supervisor/).

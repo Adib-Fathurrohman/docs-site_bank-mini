@@ -1,0 +1,222 @@
+---
+title: Skema database
+description: Tabel bisnis, kolom, relasi, kunci unik, dan constraint CHECK dari migration backend.
+sidebar:
+  order: 1
+sources:
+  - database/migrations
+  - app/Enums
+  - docs/DATA_MODEL.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Mermaid from '../../../components/Mermaid.astro';
+
+Skema dibuat oleh migration di `database/migrations`. Halaman ini hanya membahas tabel
+bisnis; tabel bawaan Laravel (`cache`, `jobs`, `sessions`, `password_reset_tokens`)
+dan `personal_access_tokens` (token Sanctum) tidak dibahas rinci.
+
+<Aside type="note" title="Prinsip umum">
+- Semua uang disimpan sebagai `integer` Rupiah.
+- Semua foreign key memakai `ON DELETE RESTRICT`: data yang punya riwayat tidak dapat
+  dihapus.
+- Constraint `CHECK` dibuat dengan `ALTER TABLE` agar berlaku di MariaDB.
+</Aside>
+
+## Diagram relasi
+
+<Mermaid
+	caption="Relasi antar tabel bisnis."
+	chart={`erDiagram
+  majors ||--o{ customers : "major_id"
+  users ||--o{ daily_reports : "teller_id"
+  users |o--o{ daily_reports : "supervisor_id"
+  users ||--o{ transactions : "user_id (teller)"
+  users |o--o{ transactions : "authorized_by"
+  users ||--o{ cash_transfers : "approved_by"
+  users |o--o{ settings : "updated_by"
+  users ||--o{ withdrawal_authorizations : "teller_id"
+  customers ||--o{ transactions : "customer_id"
+  customers ||--o{ withdrawal_authorizations : "customer_id"
+  daily_reports ||--o{ transactions : "daily_report_id"
+  daily_reports ||--o{ cash_counts : "daily_report_id"
+  daily_reports ||--o| cash_transfers : "daily_report_id"
+  daily_reports ||--o{ withdrawal_authorizations : "daily_report_id"
+  transactions ||--|{ accounting_journals : "transaction_id"
+  transactions |o--o| transactions : "corrects_transaction_id"
+  transactions |o--o| withdrawal_authorizations : "transaction_id"`}
+/>
+
+## `users`
+
+Staf: administrator, supervisor, teller.
+
+| Kolom | Tipe | Catatan |
+| --- | --- | --- |
+| `id` | bigint | PK |
+| `username` | string | Unik |
+| `password` | string | Hash bcrypt |
+| `full_name` | string | |
+| `class` | string(20), nullable | Kelas teller (siswa yang bertugas) |
+| `phone` | string(20), nullable | Nomor WhatsApp |
+| `role` | enum `admin`, `supervisor`, `teller` | Satu peran per staf |
+| `is_active` | boolean, bawaan `true` | `false` = diblokir |
+| `remember_token`, `created_at`, `updated_at` | | |
+
+## `majors`
+
+| Kolom | Tipe | Catatan |
+| --- | --- | --- |
+| `id` | bigint | PK |
+| `code` | string(10) | Unik (AK, BR, BD, MP, DKV, RPL, TKJ, LPS) |
+| `major_name` | string | Unik |
+
+## `customers`
+
+Rekening tabungan siswa.
+
+| Kolom | Tipe | Catatan |
+| --- | --- | --- |
+| `id` | bigint | PK |
+| `account_number` | string | Unik, dibuat otomatis |
+| `nis` | string | Unik |
+| `full_name` | string | |
+| `class` | enum `X`, `XI`, `XII` | |
+| `major_id` | FK → `majors` | RESTRICT |
+| `group` | enum `1`–`4` | Kelas paralel |
+| `account_status` | enum `active`, `suspended`, `inactive` | Bawaan `active` |
+| `pin` | string | Hash bcrypt, tersembunyi |
+| `pin_failed_attempts` | tinyint unsigned, bawaan 0 | Penghitung PIN salah berturut-turut |
+| `pin_locked_until` | timestamp, nullable | Akhir blokir PIN |
+| `balance` | integer, bawaan 0 | `CHECK (balance >= 0)` |
+| `deleted_at` | timestamp, nullable | Soft delete (rekening ditutup) |
+
+## `daily_reports`
+
+Shift teller sekaligus laporan harian.
+
+| Kolom | Tipe | Catatan |
+| --- | --- | --- |
+| `id` | bigint | PK |
+| `teller_id` | FK → `users` | RESTRICT |
+| `report_date` | date | **Unik bersama `teller_id`**: satu shift per teller per hari |
+| `status` | enum `open`, `submitted`, `on_hold`, `approved`, `rejected` | Bawaan `open` |
+| `opening_balance` | integer unsigned | Saldo awal |
+| `opened_at` | timestamp, nullable | |
+| `transaction_count`, `total_deposit`, `total_withdrawal` | integer unsigned | Snapshot saat ditutup |
+| `system_balance` | integer, nullable | |
+| `physical_balance` | integer unsigned, nullable | Uang fisik saat ditutup |
+| `submitted_at`, `reviewed_at` | timestamp, nullable | |
+| `supervisor_id` | FK → `users`, nullable | Pemeriksa |
+| `supervisor_note` | text, nullable | |
+
+Indeks: (`status`, `report_date`). `difference` di respons API dihitung, bukan kolom.
+
+## `cash_counts`
+
+Hitungan uang per pecahan saat membuka dan menutup shift.
+
+| Kolom | Tipe | Catatan |
+| --- | --- | --- |
+| `daily_report_id` | FK → `daily_reports` | RESTRICT |
+| `stage` | enum (`opening`, `closing`) | Dari `CashCountStage` |
+| `denomination` | integer unsigned | `CHECK (denomination > 0)` |
+| `quantity` | integer unsigned | `CHECK (quantity > 0)`; hanya jumlah > 0 yang disimpan |
+
+Unik: (`daily_report_id`, `stage`, `denomination`).
+
+## `transactions`
+
+| Kolom | Tipe | Catatan |
+| --- | --- | --- |
+| `id` | bigint | PK, nomor transaksi di struk |
+| `user_id` | FK → `users` | Teller pencatat |
+| `customer_id` | FK → `customers` | |
+| `daily_report_id` | FK → `daily_reports` | Shift |
+| `type` | enum `deposit`, `withdrawal`, `deposit_correction`, `withdrawal_correction` | `CHECK` daftar jenis |
+| `amount` | integer unsigned | `CHECK (amount > 0)` |
+| `balance_before`, `balance_after` | integer unsigned | |
+| `corrects_transaction_id` | FK → `transactions`, nullable, **unik** | Satu koreksi per transaksi |
+| `authorized_by` | FK → `users`, nullable | Supervisor yang mengotorisasi koreksi |
+| `note` | string, nullable | Alasan koreksi |
+| `idempotency_key` | string(100), nullable | **Unik bersama `user_id`** |
+
+Indeks: (`customer_id`, `created_at`), (`user_id`, `created_at`).
+
+```sql title="chk_transactions_correction"
+(type IN ('deposit', 'withdrawal') AND corrects_transaction_id IS NULL AND authorized_by IS NULL)
+OR (type IN ('deposit_correction', 'withdrawal_correction') AND corrects_transaction_id IS NOT NULL AND authorized_by IS NOT NULL)
+```
+
+## `accounting_journals`
+
+| Kolom | Tipe | Catatan |
+| --- | --- | --- |
+| `transaction_id` | FK → `transactions` | RESTRICT |
+| `account_code` | enum `101`, `201` | Indeks |
+| `position` | enum `debit`, `credit` | `CHECK position IN ('debit','credit')` |
+| `amount` | integer unsigned | `CHECK (amount > 0)` |
+
+Unik: (`transaction_id`, `position`): tepat satu debit dan satu kredit per transaksi.
+
+## `cash_transfers`
+
+Pemindahan kas dari laci teller ke brankas, dibuat saat laporan disetujui.
+
+| Kolom | Tipe | Catatan |
+| --- | --- | --- |
+| `daily_report_id` | FK → `daily_reports`, **unik** | Satu pemindahan per laporan |
+| `amount` | integer unsigned | `CHECK (amount > 0)` |
+| `approved_by` | FK → `users` | Supervisor |
+| `transferred_at` | timestamp | |
+
+`source` (`teller_drawer`) dan `destination` (`main_vault`) di respons API adalah nilai
+tetap, bukan kolom.
+
+## `settings`
+
+| Kolom | Tipe | Catatan |
+| --- | --- | --- |
+| `key` | string(50) | PK: `min_balance`, `qr_scanner_mode`, `withdrawal_verification` |
+| `value` | string | |
+| `updated_by` | FK → `users`, nullable | Admin yang terakhir mengubah |
+
+## `withdrawal_authorizations`
+
+Permintaan penarikan yang disetujui nasabah di aplikasi (Mode A).
+
+| Kolom | Tipe | Catatan |
+| --- | --- | --- |
+| `id` | bigint | PK internal, tidak pernah diekspos |
+| `public_id` | ULID, unik | `{id}` di URL dan respons |
+| `teller_id`, `customer_id`, `daily_report_id` | FK | RESTRICT |
+| `amount` | integer unsigned | `CHECK (amount > 0)` |
+| `status` | enum `pending`, `approved`, `rejected`, `cancelled`, `expired`, `consumed` | Bawaan `pending` |
+| `expires_at` | timestamp | Batas keputusan nasabah |
+| `approved_at`, `approval_expires_at` | timestamp, nullable | Batas penyelesaian teller |
+| `rejected_at`, `cancelled_at` | timestamp, nullable | |
+| `cancel_reason` | string(20), nullable | `teller` atau `shift_closed` |
+| `consumed_at` | timestamp, nullable | |
+| `transaction_id` | FK → `transactions`, nullable, **unik** | Satu transaksi per permintaan |
+
+Indeks: (`customer_id`, `status`), (`teller_id`, `status`). **Tidak ada kolom PIN.**
+
+```sql title="chk_wa_consumed dan chk_wa_approved"
+-- consumed selalu menunjuk ke penarikannya; status lain tidak pernah
+(status = 'consumed' AND transaction_id IS NOT NULL AND consumed_at IS NOT NULL)
+OR (status <> 'consumed' AND transaction_id IS NULL)
+
+-- approved dan consumed selalu punya waktu persetujuan
+status NOT IN ('approved', 'consumed') OR (approved_at IS NOT NULL AND approval_expires_at IS NOT NULL)
+```
+
+## `personal_access_tokens`
+
+Token Sanctum: `tokenable` (morph ke `users` atau `customers`), `name` (`staff-portal`
+atau `customer-portal`), `token` (hash, unik), `abilities` (tidak dipakai),
+`last_used_at`, `expires_at`.
+
+<Aside type="caution" title="Database lama harus dibangun ulang">
+Migration lama diubah selama pengembangan. Database yang dibuat sebelum perubahan itu
+harus dibangun ulang dengan `php artisan migrate:fresh --seed` (menghapus datanya).
+</Aside>

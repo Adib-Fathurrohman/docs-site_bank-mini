@@ -1,0 +1,147 @@
+---
+title: Peran dan hak akses (RBAC)
+description: Model otorisasi backend, middleware peran, pemeriksaan kepemilikan data, dan matriks kemampuan keempat aktor.
+sidebar:
+  order: 2
+sources:
+  - routes/api.php
+  - app/Http/Middleware/EnsureStaffRole.php
+  - app/Http/Middleware/EnsureCustomer.php
+  - docs/RBAC.md
+  - tests/Feature/RoleAccessTest.php
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Mermaid from '../../../components/Mermaid.astro';
+
+## Empat lapisan pemeriksaan
+
+| Lapisan | Pertanyaan | Tempat | Jika gagal |
+| --- | --- | --- | --- |
+| **Autentikasi** | Siapa yang memanggil? | `auth:sanctum` di setiap route kecuali login | `401 Unauthenticated.` |
+| **Otorisasi** | Bolehkah aktor/peran ini memanggil endpoint ini? Apakah data ini miliknya? | Middleware `staff`, `staff:{peran}`, `customer`; cek kepemilikan di controller | `403` (peran) atau `404` (bukan miliknya) |
+| **Aturan bisnis** | Bolehkah aksi ini dalam keadaan sekarang? | Service (status shift, saldo, PIN, status laporan, …) | `422` |
+| **Tampilan klien** | Menu dan tombol apa yang ditampilkan? | Kode React / Expo | — |
+
+<Aside type="danger" title="Menyembunyikan tombol bukan pengamanan">
+Setiap permintaan diperiksa ulang oleh backend terhadap database (peran dan
+`is_active` dibaca baru untuk setiap token). Klien hanya meniru aturan backend agar
+pengguna tidak melihat halaman yang pasti gagal.
+</Aside>
+
+## Aktor dan model
+
+Staf dan nasabah adalah **tabel dan model yang berbeda**. Nasabah bukan baris di
+tabel `users` dan tidak punya `role`.
+
+| Aktor | Model | Nilai `role` | Catatan |
+| --- | --- | --- | --- |
+| Administrator | `App\Models\User` | `admin` | Dibuat oleh seeder; tidak dapat dibuat, diubah, diblokir, atau dihapus lewat API |
+| Supervisor | `User` | `supervisor` | |
+| Teller | `User` | `teller` | Biasanya siswa yang bertugas (kolom `class`, `phone`) |
+| Nasabah | `App\Models\Customer` | — | Siswa; masuk dengan NIS/nomor rekening + PIN |
+
+Setiap staf punya tepat satu peran. Pengguna dengan banyak peran tidak didukung.
+
+<Mermaid
+	caption="Hubungan aktor dengan data yang mereka miliki atau periksa."
+	chart={`flowchart LR
+  admin(["Admin"]) -- "mengelola" --> staff["Staf<br/>teller · supervisor"]
+  admin -- "membuka & mengelola" --> cust["Rekening nasabah"]
+  admin -- "mengubah" --> set["Pengaturan"]
+  teller(["Teller"]) -- "memiliki" --> shift["Shift / laporan harian"]
+  teller -- "mencatat" --> trx["Transaksi"]
+  teller -- "memulai" --> wa["Permintaan penarikan"]
+  nasabah(["Nasabah"]) -- "menyetujui / menolak<br/>dengan PIN" --> wa
+  nasabah -- "melihat" --> cust
+  sup(["Supervisor"]) -- "menyetujui · menahan · menolak" --> shift
+  sup -- "mengotorisasi koreksi" --> trx
+  shift -- "disetujui" --> vault["Pemindahan kas<br/>ke brankas"]`}
+/>
+
+## Middleware
+
+| Middleware | Kelas | Efek |
+| --- | --- | --- |
+| `auth:sanctum` | Laravel Sanctum | Butuh token bearer valid dan belum kedaluwarsa. Jika tidak: `401 {"message":"Unauthenticated."}` |
+| `staff` | `EnsureStaffRole` | Token harus milik `User` dengan `is_active = true`. Jika tidak: `403 "Fitur ini khusus untuk staf bank."` atau `"Akun staf ini sudah dinonaktifkan."` |
+| `staff:admin,supervisor` (dst.) | `EnsureStaffRole` | Seperti di atas, ditambah `role` harus ada di daftar. Jika tidak: `403 "Peran Anda tidak memiliki akses ke fitur ini."` |
+| `customer` | `EnsureCustomer` | Token harus milik `Customer` yang statusnya bukan `inactive`. Jika tidak: `403 "Fitur ini khusus untuk nasabah."` atau `"Rekening ini sudah tidak aktif."` |
+| `throttle:login` | Rate limiter | 5 percobaan per menit per username/identifier + IP |
+| `throttle:10,1` | Rate limiter | 10 koreksi per menit per teller |
+| `throttle:withdrawal-authorization-*` | Rate limiter bernama | Batas permintaan otorisasi penarikan per aktor (lihat [API otorisasi penarikan](/api/withdrawal-authorizations/)) |
+
+Middleware peran berjalan **sebelum** route model binding, sehingga pemanggil dengan
+peran salah selalu mendapat `403` dan tidak dapat mengetahui apakah suatu id ada.
+`tests/Feature/RoleAccessTest.php` memeriksa setiap endpoint untuk setiap aktor dan
+memastikan setiap route API selain login punya `auth:sanctum` dan middleware aktor.
+
+## Pemeriksaan di controller
+
+| Pemeriksaan | Endpoint | Hasil |
+| --- | --- | --- |
+| Teller hanya melihat dan mencetak shift sendiri | `GET /teller/daily-reports/{id}`, `/export` | `404` untuk laporan teller lain |
+| Teller hanya mencetak dan mengoreksi transaksi sendiri | `GET /teller/transactions/{id}/receipt`, `POST …/correct` | `404` |
+| Daftar dibatasi ke pemanggil | `GET /teller/transactions`, `/teller/daily-reports`, `/teller/shift`, semua `/customer/*` | Hanya data sendiri; parameter tidak dapat memilih akun lain |
+| Detail transaksi nasabah | `GET /customer/transactions/{id}` | `404` untuk transaksi nasabah lain |
+| Permintaan penarikan (teller) | `/teller/withdrawal-authorizations/{id}[/cancel\|/complete]` | `404` untuk permintaan teller lain |
+| Permintaan penarikan (nasabah) | `/customer/withdrawal-authorizations/{id}[/approve\|/reject]` | `404` untuk permintaan nasabah lain |
+| Akun administrator dilindungi | `PUT/PATCH/DELETE /admin/staff/{id}`, `…/block`, `…/unblock` | `403 "Akun administrator tidak dapat diubah melalui API."` |
+| Otorisasi koreksi | `POST /teller/transactions/{id}/correct` | Butuh `supervisor_username` + `supervisor_password` milik supervisor aktif (`422` jika salah) |
+
+## Matriks kemampuan
+
+✓ = diizinkan. — = ditolak backend (`403`). Hanya kemampuan yang benar-benar ada di
+backend yang dicantumkan.
+
+| Kemampuan | Admin | Supervisor | Teller | Nasabah |
+| --- | :-: | :-: | :-: | :-: |
+| Login, logout, membaca profil sendiri | ✓ | ✓ | ✓ | ✓ |
+| Membaca jurusan dan pengaturan | ✓ | ✓ | ✓ | — |
+| Mengubah pengaturan | ✓ | — | — | — |
+| Melihat daftar dan detail staf | ✓ | ✓ | — | — |
+| Membuat, mengubah, memblokir, menghapus, mengimpor teller/supervisor | ✓ | — | — | — |
+| Melihat daftar dan detail rekening (termasuk yang ditutup) | ✓ | ✓ | — | — |
+| Membuka, mengubah, reset PIN, menangguhkan, menutup rekening | ✓ | — | — | — |
+| Data kartu nasabah (payload QR) untuk dicetak | ✓ | — | — | — |
+| PDF mutasi nasabah mana pun | ✓ | ✓ | — | — |
+| Mencari satu nasabah lewat QR / nomor rekening / NIS | — | — | ✓ | — |
+| Membuka, melihat, menutup shift sendiri | — | — | ✓ | — |
+| Setor dan tarik tunai | — | — | ✓ | — |
+| Memulai, memantau, membatalkan, menyelesaikan permintaan penarikan | — | — | ✓ | — |
+| Menyetujui (dengan PIN sendiri) atau menolak permintaan penarikan untuk rekening sendiri | — | — | — | ✓ |
+| Mengoreksi transaksi sendiri | — | — (mengotorisasi dengan kredensial) | ✓ | — |
+| Transaksi sendiri per hari, struk PDF | — | — | ✓ | — |
+| Riwayat shift sendiri, PDF laporan harian | — | — | ✓ | — |
+| Melihat semua laporan harian, PDF laporan | — | ✓ | — | — |
+| Menyetujui, menahan, menolak laporan harian | — | ✓ | — | — |
+| Buku brankas (pemindahan kas) | — | ✓ | — | — |
+| Log audit transaksi (+ PDF) | ✓ | ✓ | — | — |
+| Jurnal akuntansi, neraca saldo (+ PDF) | ✓ | ✓ | — | — |
+| PDF laporan tahunan | ✓ | ✓ | — | — |
+| Saldo, mutasi, detail transaksi, PDF mutasi milik sendiri | — | — | — | ✓ |
+| Kartu digital sendiri (payload QR) | — | — | — | ✓ |
+| Mengganti PIN sendiri | — | — | — | ✓ |
+| Mengganti password staf sendiri | — | — | — | — |
+
+Catatan:
+
+- **Supervisor dan koreksi.** Supervisor tidak pernah memanggil endpoint koreksi.
+  Mereka mengotorisasi koreksi teller dengan mengetik username dan password sendiri
+  di layar teller.
+- **Tidak ada yang dapat** mengubah atau menghapus transaksi, baris jurnal, laporan
+  yang sudah disetujui, atau pemindahan kas.
+- **Mengganti password sendiri** tidak tersedia untuk siapa pun. Admin dapat mengatur
+  password teller dan supervisor lewat `PATCH /admin/staff/{id}`.
+
+Rincian per peran: [Admin](/roles/admin/), [Supervisor](/roles/supervisor/),
+[Teller](/roles/teller/), [Nasabah](/roles/customer/).
+
+## Pedoman untuk klien
+
+- Tentukan rute berdasarkan `data.actor` dari respons login, lalu `data.user.role`.
+- Aplikasi web staf sebaiknya menolak `actor: "customer"`, dan aplikasi mobile
+  menolak `actor: "staff"`.
+- Pada `401` atau `403` dari pemeriksaan peran, hapus token dan kembali ke halaman
+  login (rubrik UKK 3.2). Satu-satunya `403` yang merupakan error bisnis biasa adalah
+  `Akun administrator tidak dapat diubah melalui API.` saat mengubah staf.

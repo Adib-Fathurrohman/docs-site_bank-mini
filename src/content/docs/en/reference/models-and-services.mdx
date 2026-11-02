@@ -1,0 +1,91 @@
+---
+title: Models and services
+description: Eloquent models with their relations and immutability guards, enums, middleware, and the services that hold the business rules.
+sidebar:
+  order: 2
+sources:
+  - app/Models
+  - app/Services
+  - app/Enums
+  - app/Http/Middleware
+  - routes/console.php
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Models
+
+| Model | Table | Relations | Guards |
+| --- | --- | --- | --- |
+| `User` | `users` | `transactions`, `dailyReports` (teller), `reviewedDailyReports` (supervisor), `approvedCashTransfers`, `withdrawalAuthorizations` (teller) | — |
+| `Customer` | `customers` | `major`, `transactions`, `withdrawalAuthorizations` | Soft deletes; `pin` cast `hashed` and hidden |
+| `Major` | `majors` | `customers` | — |
+| `DailyReport` | `daily_reports` | `teller`, `supervisor`, `transactions`, `cashCounts` (largest denomination first), `cashTransfer` | An `approved` report cannot be changed; reports can never be deleted |
+| `CashCount` | `cash_counts` | `dailyReport` | — |
+| `Transaction` | `transactions` | `customer` (including closed ones), `teller`, `dailyReport`, `corrects`, `correction`, `authorizer`, `withdrawalAuthorization`, `accountingJournals` | Cannot be updated or deleted |
+| `AccountingJournal` | `accounting_journals` | `transaction` | Cannot be updated or deleted |
+| `CashTransfer` | `cash_transfers` | `dailyReport`, `approver` | Cannot be updated or deleted |
+| `Setting` | `settings` | `updatedBy` | — |
+| `WithdrawalAuthorization` | `withdrawal_authorizations` | `teller`, `customer` (including closed ones), `dailyReport`, `transaction` | `public_id` ULID generated automatically and used as the route key; final statuses cannot be changed; can never be deleted |
+
+The immutability guards are model events (`static::updating`, `static::deleting`) that
+throw a `LogicException`. They are an extra layer on top of the missing edit/delete
+endpoints and `ON DELETE RESTRICT` in the database.
+
+## Enums
+
+| Enum | Values |
+| --- | --- |
+| `UserRoles` | `admin`, `supervisor`, `teller` |
+| `AccountStatus` | `active`, `suspended`, `inactive` |
+| `TransactionTypes` | `deposit`, `withdrawal`, `deposit_correction`, `withdrawal_correction` |
+| `ReportStatus` | `open`, `submitted`, `on_hold`, `approved`, `rejected` |
+| `CashCountStage` | `opening`, `closing` |
+| `AccountCode` | `101` (Kas), `201` (Tabungan Nasabah) |
+| `Position` | `debit`, `credit` |
+| `WithdrawalAuthorizationStatus` | `pending`, `approved`, `consumed`, `rejected`, `cancelled`, `expired` |
+
+## Services
+
+Business rules live in `app/Services`. Controllers are thin: they validate, call a
+service and pick a resource.
+
+| Service | Responsibility | Public methods |
+| --- | --- | --- |
+| `TransactionService` | Deposits, withdrawals, completing approved withdrawals, corrections. All through `record()` in one database transaction with row locks | `deposit`, `withdraw`, `completeAuthorizedWithdrawal`, `correct` |
+| `JournalService` | Writes the two journal lines per transaction | `record` |
+| `PinService` | The only place a PIN is checked; shared counter and lock in its own transaction | `verify`, `change` |
+| `WithdrawalAuthorizationService` | Creates, approves, rejects and cancels withdrawal requests; applies expiry | `create`, `approve`, `reject`, `cancel`, `current`, `expireOverdue` |
+| `DailyReportService` | Opens and closes shifts, computes totals, supervisor decisions | `activeShift`, `shiftForTransaction`, `shiftForCorrection`, `open`, `close`, `summarize`, `approve`, `hold`, `reject`, `withLiveTotals` |
+| `CustomerService` | Opens accounts with generated numbers, closes accounts | `create`, `deactivate`, `nextAccountNumber` |
+| `SettingsService` | Reads and changes settings and their rules | `definitions`, `get`, `all`, `update`, `rules`, `minBalance`, `allowsMobileWithdrawalVerification`, `allowsTerminalWithdrawalVerification` |
+| `StaffImportService` | Imports staff from `.xlsx`/`.csv`, all or nothing | `import` |
+| `ReportService` | Statement and annual report data | `statement`, `annual` |
+| `PdfReportService` | Builds PDFs with DomPDF | `dailyReport`, `receipt`, `statement`, `annual` |
+
+<Aside type="note" title="Lock order">
+Every service that changes money locks rows in the same order: teller → shift →
+withdrawal authorization → customer. This fixed order prevents deadlocks when two
+requests run at the same time.
+</Aside>
+
+## Middleware
+
+| Alias | Class | Purpose |
+| --- | --- | --- |
+| `staff`, `staff:{role,…}` | `App\Http\Middleware\EnsureStaffRole` | The token belongs to an active `User` with an allowed role |
+| `customer` | `App\Http\Middleware\EnsureCustomer` | The token belongs to a `Customer` that is not `inactive` |
+
+Named rate limiters are registered in `AppServiceProvider`: `login` (per identifier +
+IP), `withdrawal-authorization-create`, `withdrawal-authorization-poll` and
+`withdrawal-authorization-decide` (per actor type + id).
+
+## Scheduled commands
+
+Defined in `routes/console.php`; they need `php artisan schedule:work` or a cron job
+running `schedule:run`.
+
+| Command | Schedule | Purpose |
+| --- | --- | --- |
+| `sanctum:prune-expired --hours=24` | Daily | Deletes expired tokens |
+| `bank:expire-withdrawal-authorizations` | Every minute | Marks open withdrawal requests past their deadline as `expired`; prints `Expired: N` |

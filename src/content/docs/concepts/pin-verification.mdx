@@ -1,0 +1,137 @@
+---
+title: Verifikasi PIN
+description: Cara PIN nasabah disimpan dan diperiksa, blokir PIN bersama, dan dua mode otorisasi penarikan.
+sidebar:
+  order: 5
+sources:
+  - app/Services/PinService.php
+  - app/Services/SettingsService.php
+  - app/Http/Controllers/API/Customer/AuthController.php
+  - config/bank.php
+  - docs/PIN_VERIFICATION.md
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+import Mermaid from '../../../components/Mermaid.astro';
+
+PIN nasabah adalah 6 digit angka. PIN dipakai untuk login nasabah, mengotorisasi
+penarikan, dan mengganti PIN. Semua pemeriksaan PIN berjalan di **satu tempat**:
+`App\Services\PinService::verify()`.
+
+## Penyimpanan
+
+- `customers.pin` di-cast `hashed` (bcrypt, `BCRYPT_ROUNDS=12`) dan termasuk atribut
+  tersembunyi (`$hidden`). Tidak ada resource, pesan error, atau log yang memuat PIN.
+- Tabel `withdrawal_authorizations` **tidak punya kolom PIN**.
+- PIN awal ditetapkan admin saat membuka rekening. Admin dapat me-reset PIN, yang juga
+  membuka blokir PIN. Nasabah dapat mengganti PIN sendiri.
+
+## Blokir PIN bersama
+
+<Mermaid
+	caption="Penghitung PIN salah. Tiga kesalahan berturut-turut di mana pun memblokir PIN di semua tempat."
+	chart={`stateDiagram-v2
+  direction LR
+  [*] --> Normal
+  Normal --> Normal: PIN benar (penghitung jadi 0)
+  Normal --> Salah1: PIN salah
+  Salah1 --> Salah2: PIN salah
+  Salah1 --> Normal: PIN benar
+  Salah2 --> Diblokir: PIN salah ke-3
+  Salah2 --> Normal: PIN benar
+  Diblokir --> Normal: 15 menit berlalu atau admin reset PIN
+  note right of Diblokir
+    PIN benar pun ditolak.
+    pin_locked_until = sekarang + 15 menit
+  end note`}
+/>
+
+| Aturan | Nilai |
+| --- | --- |
+| Kesalahan sebelum blokir | 3 berturut-turut (`BANK_PIN_MAX_ATTEMPTS`) |
+| Lama blokir | 15 menit (`BANK_PIN_LOCK_MINUTES`) |
+| Berlaku di | Login nasabah, persetujuan penarikan di aplikasi, penarikan dengan PIN di loket, ganti PIN |
+| Reset penghitung | PIN benar, atau admin mengatur PIN baru |
+| Kolom | `pin_failed_attempts`, `pin_locked_until` |
+
+`PinService::verify()` berjalan dalam **transaksi database sendiri** dengan row lock
+pada nasabah, sehingga percobaan yang salah tetap tersimpan walaupun permintaannya
+gagal. Pemanggil yang punya transaksi lebih besar (persetujuan, penarikan di loket)
+memanggilnya **sebelum** transaksi itu.
+
+<Aside type="caution" title="Satu blokir untuk semua tempat">
+Tiga PIN salah saat login juga memblokir persetujuan penarikan, dan sebaliknya.
+Nomor rekening dan NIS mengarah ke penghitung yang sama.
+</Aside>
+
+### Respons saat PIN salah
+
+<Tabs>
+<TabItem label="Login">
+Login **tidak** memberi tahu sisa percobaan:
+
+```json
+{ "message": "NIS/nomor rekening atau PIN salah.", "errors": { "identifier": ["NIS/nomor rekening atau PIN salah."] } }
+```
+
+Sejak percobaan ketiga sampai blokir berakhir (jam lokal WIB):
+
+```json
+{ "message": "Terlalu banyak percobaan PIN salah. Coba lagi pukul 09:15.", "errors": { "identifier": ["Terlalu banyak percobaan PIN salah. Coba lagi pukul 09:15."] } }
+```
+</TabItem>
+<TabItem label="Persetujuan, penarikan, ganti PIN">
+```json
+{ "message": "PIN salah. Sisa percobaan: 2.", "remaining_attempts": 2, "pin_locked_until": null }
+```
+
+Saat diblokir (`pin_locked_until` dalam UTC, pesan dalam WIB):
+
+```json
+{
+  "message": "PIN diblokir sementara karena terlalu banyak percobaan salah. Coba lagi pukul 20:25.",
+  "remaining_attempts": 0,
+  "pin_locked_until": "2026-10-27T13:25:37.830610Z"
+}
+```
+</TabItem>
+</Tabs>
+
+## Dua mode otorisasi penarikan
+
+Setiap penarikan butuh PIN nasabah. **Siapa yang mengetik PIN dan di perangkat mana**
+ditentukan oleh pengaturan `withdrawal_verification`.
+
+| Mode | Nilai pengaturan | Cara kerja | Endpoint |
+| --- | --- | --- | --- |
+| **A · Persetujuan di aplikasi** (bawaan) | `mobile` atau `both` | Teller membuat permintaan; nasabah menyetujuinya dengan PIN di HP sendiri; teller menyelesaikannya. Teller tidak pernah melihat atau mengirim PIN | `/api/teller/withdrawal-authorizations`, `/api/customer/withdrawal-authorizations` |
+| **B · PIN di loket** | `terminal` atau `both` | Nasabah mengetik PIN di layar teller; penarikan berjalan dalam satu permintaan | `POST /api/teller/withdrawals` |
+
+<Mermaid
+	caption="Mode yang aktif ditentukan pengaturan withdrawal_verification."
+	chart={`flowchart LR
+  S{"withdrawal_verification"} -- "mobile" --> A["Mode A saja"]
+  S -- "terminal" --> B["Mode B saja"]
+  S -- "both" --> AB["Mode A atau B"]
+  A --> A1["POST /teller/withdrawals<br/>ditolak 422"]
+  B --> B1["POST /teller/withdrawal-authorizations<br/>ditolak 422"]`}
+/>
+
+Mode B mati secara bawaan karena PIN melewati klien teller. Mode B juga punya
+keterbatasan **L2**: PIN diperiksa sebelum status shift, rekening, dan saldo, sehingga
+PIN salah tetap dihitung walaupun penarikan pasti gagal karena alasan lain. Mode A
+tidak punya masalah ini karena semuanya diperiksa saat permintaan dibuat.
+
+Alur lengkap:
+
+- [Persetujuan PIN di aplikasi (Mode A)](/workflows/withdrawal-pin-authorization/)
+- [Tarik tunai dengan PIN di loket (Mode B)](/workflows/withdrawal/)
+- [Pertimbangan keamanan](/reference/security/)
+
+## Yang belum tersedia
+
+- Lupa PIN oleh nasabah sendiri. PIN di-reset oleh admin.
+- Notifikasi push untuk permintaan penarikan (memakai polling).
+- Persetujuan di aplikasi untuk setoran atau koreksi (hanya penarikan).
+- Pembatasan token nasabah per perangkat: perangkat mana pun tempat nasabah login
+  dapat menyetujui.

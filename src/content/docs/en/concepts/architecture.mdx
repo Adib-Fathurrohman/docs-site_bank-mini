@@ -1,0 +1,162 @@
+---
+title: System architecture
+description: System components, client-server communication, the Laravel backend layers, and the path of one request from the client to the database.
+sidebar:
+  order: 1
+sources:
+  - routes/api.php
+  - bootstrap/app.php
+  - app/Http
+  - app/Services
+  - docs/FRONTEND_HANDOFF.md
+  - docs/AUTH.md
+---
+
+import { Aside, FileTree } from '@astrojs/starlight/components';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+## The big picture
+
+The system is one backend and two clients. The backend has no web UI of its own
+(apart from Laravel's welcome page at `/` and the `/up` health check); everything is
+available as a **JSON REST API** under `/api`.
+
+<Mermaid
+	caption="System components. Dashed lines: clients that are not finished."
+	chart={`flowchart TB
+  subgraph clients["Clients"]
+    direction LR
+    web["Staff web app<br/>React<br/>Admin · Supervisor · Teller"]
+    mobile["Customer mobile app<br/>React Native + Expo<br/>Students"]
+  end
+  subgraph server["Laravel 13 backend"]
+    direction TB
+    routes["routes/api.php<br/>67 routes"]
+    mw["Middleware<br/>auth:sanctum · staff · customer · throttle"]
+    ctrl["Controller + Form Request"]
+    svc["Services<br/>business rules · DB transactions"]
+    res["API Resources<br/>JSON response shape"]
+    pdf["DomPDF<br/>receipts & reports"]
+    sched["Scheduler<br/>prune tokens · expire authorizations"]
+  end
+  db[("MariaDB · InnoDB<br/>FK RESTRICT · CHECK")]
+  web -. "Bearer token" .-> routes
+  mobile -. "Bearer token" .-> routes
+  routes --> mw --> ctrl --> svc --> db
+  ctrl --> res
+  svc --> pdf
+  sched --> db`}
+/>
+
+## Client-server communication
+
+| Aspect | Behavior |
+| --- | --- |
+| Protocol | HTTP(S), JSON. Send `Accept: application/json` on every request |
+| Authentication | Laravel Sanctum bearer token in the `Authorization` header. No cookies or sessions |
+| State | Stateless: every request carries the token, and the token owner is reloaded from the database |
+| Single login gateway | `POST /api/login` for all four actors; `data.actor` tells the client which portal to open |
+| Client separation | Staff tokens only work on staff endpoints; customer tokens only on `/api/customer/*` (otherwise `403`) |
+| Data updates | **Polling**, not push. No WebSockets or push notifications |
+| Files | Reports, receipts and statements are returned as PDF (`Content-Type: application/pdf`) |
+| CORS | All origins allowed, no credentials, no exposed response headers |
+
+<Aside type="note" title="Why polling">
+A withdrawal approval request is made while the customer stands at the counter and
+lives only 120 seconds, so polling is enough. The teller checks the status about every
+2 seconds; the customer app checks its list of requests while it is open.
+</Aside>
+
+## Backend layers
+
+Each layer has one job. There are no Laravel policies or gates; authorization is done
+by route middleware, a few ownership checks in controllers, and business rules in
+services.
+
+| Layer | Location | Responsibility |
+| --- | --- | --- |
+| Routes | `routes/api.php` | Paths, HTTP methods, middleware per group |
+| Middleware | `app/Http/Middleware` + Sanctum | Valid token, actor type, role, active status, rate limits |
+| Form requests | `app/Http/Requests` | Field validation (`422` with `errors`) |
+| Controllers | `app/Http/Controllers/API` | Read input, check ownership (`404`), call services, pick the resource |
+| Services | `app/Services` | Business rules, database transactions, row locks, journal |
+| Models | `app/Models` | Eloquent relations, casts, immutability guards |
+| Resources | `app/Http/Resources` | Response JSON; hide PINs, passwords and idempotency keys |
+| Exceptions | `app/Exceptions` | Business rules that refuse a request, rendered as `422` |
+
+<FileTree>
+- app/
+  - Enums/ statuses, roles, transaction types, account codes
+  - Exceptions/ BankingException and its subclasses
+  - Http/
+    - Controllers/API/
+      - Admin/ CustomerController, StaffController
+      - Audit/ JournalController, TransactionController
+      - Customer/ AccountController, AuthController, WithdrawalAuthorizationController
+      - Staff/ AuthController
+      - Supervisor/ CashTransferController, DailyReportController
+      - Teller/ CustomerLookupController, DailyReportController, ShiftController, TransactionController, WithdrawalAuthorizationController
+      - LoginController.php
+      - MajorController.php
+      - ReportController.php
+      - SettingsController.php
+    - Middleware/ EnsureCustomer, EnsureStaffRole
+    - Requests/
+    - Resources/
+  - Models/
+  - Services/
+- config/bank.php
+- database/migrations/
+- routes/
+  - api.php
+  - console.php
+</FileTree>
+
+## The path of one request
+
+Example: a teller records a deposit (`POST /api/teller/deposits`).
+
+<Mermaid
+	caption="The checks for a deposit request. Any failure stops the request and nothing is saved."
+	chart={`sequenceDiagram
+  autonumber
+  participant C as Teller client
+  participant S as Sanctum
+  participant M as EnsureStaffRole
+  participant R as Form request
+  participant T as TransactionService
+  participant D as Database
+  C->>S: POST /api/teller/deposits + Bearer token
+  S-->>C: 401 if the token is missing / expired
+  S->>M: token owner (reloaded from DB)
+  M-->>C: 403 if not staff, blocked, or not a teller
+  M->>R: validate account_number, amount
+  R-->>C: 422 + errors if a field is invalid
+  R->>T: deposit(customer, amount, teller, key)
+  T->>D: BEGIN · lock teller → shift → customer
+  T->>D: balance += amount · insert transaction · insert 2 journal lines
+  T->>D: COMMIT
+  T-->>C: 201 Transaction (or 422 business rule)`}
+/>
+
+What matters in this order:
+
+- **The role is checked before the record is looked up.** A caller with the wrong
+  role always gets `403`, never `404`, so they cannot probe whether an id exists.
+- **Someone else's record answers `404`**, as if it did not exist.
+- **Every money change happens in one database transaction.** If one step fails,
+  everything is rolled back.
+
+## Atomicity and concurrency
+
+| Technique | Used for |
+| --- | --- |
+| `DB::transaction()` | Balance, transaction and journal are written together or not at all |
+| Row locks in a fixed order (teller → shift → authorization → customer) | Stop two concurrent requests from changing the same balance, and avoid deadlocks |
+| Compare-and-set updates (`UPDATE … WHERE status = …`) | Withdrawal authorization status changes: only one of two racing requests wins |
+| Database unique keys | One shift per teller per day, one correction per transaction, one transaction per authorization, idempotency keys per teller |
+| `CHECK` constraints | Amount > 0, balance ≥ 0, correction links, consistent authorization states |
+| `Idempotency-Key` header | A money request retried after a timeout is not recorded twice |
+
+Details are in [Transaction lifecycle](/en/concepts/transaction-lifecycle/) and
+[Database schema](/en/reference/database-schema/).

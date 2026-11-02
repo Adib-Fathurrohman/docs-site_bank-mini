@@ -1,0 +1,81 @@
+---
+title: Konfigurasi
+description: Variabel lingkungan backend, pengaturan yang dapat diubah admin saat aplikasi berjalan, dan kebutuhan lingkungan lainnya.
+sidebar:
+  order: 3
+sources:
+  - .env.example
+  - config/bank.php
+  - app/Services/SettingsService.php
+  - docs/BACKEND_CHECKPOINT.md
+  - docs/AUTH.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Konfigurasi backend ada di dua tempat:
+
+1. **Variabel lingkungan** (`.env`), dibaca saat aplikasi berjalan. Mengubahnya butuh
+   akses ke server.
+2. **Pengaturan** di tabel `settings`, diubah administrator lewat API tanpa
+   menyentuh server.
+
+## Variabel khusus bank
+
+Didefinisikan di `config/bank.php` dan tercantum di `.env.example`.
+
+| Variabel | Bawaan | Fungsi |
+| --- | --- | --- |
+| `BANK_NAME` | `Bank Mini Sekolah` | Nama bank yang dicetak di struk dan laporan PDF |
+| `BANK_SCHOOL` | `SMK` | Nama sekolah yang dicetak di PDF |
+| `BANK_MIN_BALANCE` | `10000` | Nilai awal pengaturan `min_balance` (Rupiah) |
+| `BANK_PIN_MAX_ATTEMPTS` | `3` | PIN salah berturut-turut sebelum PIN diblokir |
+| `BANK_PIN_LOCK_MINUTES` | `15` | Lama blokir PIN (menit) |
+| `BANK_WITHDRAWAL_AUTH_PENDING_SECONDS` | `120` | Batas waktu nasabah menyetujui permintaan penarikan |
+| `BANK_WITHDRAWAL_AUTH_APPROVED_SECONDS` | `120` | Batas waktu teller menyelesaikan penarikan setelah disetujui |
+| `SANCTUM_EXPIRATION` | `480` | Masa berlaku token API (menit). Absolut, tidak diperpanjang oleh aktivitas |
+
+Pecahan uang yang dihitung teller juga ada di `config/bank.php`, tetapi tidak dapat
+diatur lewat `.env`: `100000`, `50000`, `20000`, `10000`, `5000`, `2000`, `1000`,
+`500`, `200`, `100`.
+
+## Variabel Laravel yang penting
+
+| Variabel | Nilai yang dipakai | Catatan |
+| --- | --- | --- |
+| `APP_TIMEZONE` | `Asia/Jakarta` | Menentukan "hari ini" untuk shift dan format tanggal `YYYY-MM-DD` |
+| `APP_DEBUG` | `true` di lokal | Jika `true`, respons `500` berisi stack trace. Set `false` di luar pengembangan |
+| `DB_CONNECTION` | `mariadb` | Lihat [Instalasi](/getting-started/installation/) |
+| `CACHE_STORE` | `database` | Rate limiter login memakai cache ini (tabel `cache`) |
+| `BCRYPT_ROUNDS` | `12` | Biaya hash password staf dan PIN nasabah |
+| `QUEUE_CONNECTION`, `SESSION_DRIVER` | `database` | Tidak dipakai API; nilai bawaan tidak berpengaruh |
+
+## Pengaturan yang diubah admin
+
+Disimpan di tabel `settings` (`key`, `value`, `updated_by`). Semua staf dapat
+membacanya lewat `GET /api/settings`; hanya admin yang dapat mengubahnya lewat
+`PUT|PATCH /api/admin/settings`. Lihat [API Admin](/api/admin/#pengaturan).
+
+| Kunci | Nilai | Bawaan | Fungsi |
+| --- | --- | --- | --- |
+| `min_balance` | Bilangan bulat 0 – 1.000.000 | `10000` | Saldo yang harus tersisa setelah penarikan |
+| `qr_scanner_mode` | `webcam`, `usb`, `disabled` | `webcam` | Cara layar teller membaca kartu QR. Hanya disimpan dan dikembalikan; backend tidak membatasi lookup berdasarkan nilai ini |
+| `withdrawal_verification` | `mobile`, `terminal`, `both` | `mobile` | Cara nasabah mengotorisasi penarikan. Lihat [Verifikasi PIN](/concepts/pin-verification/) |
+
+```json title="GET /api/settings — contoh respons"
+{ "data": { "min_balance": 10000, "qr_scanner_mode": "webcam", "withdrawal_verification": "mobile" } }
+```
+
+## Kebutuhan lingkungan lain
+
+| Hal | Kebutuhan |
+| --- | --- |
+| Base URL API | `{APP_URL}/api`. Klien sebaiknya membacanya dari variabel lingkungan, misalnya `VITE_API_BASE_URL` (web) dan `EXPO_PUBLIC_API_BASE_URL` (Expo) |
+| CORS | Bawaan framework (tidak ada `config/cors.php`): path `api/*`, semua origin, metode, dan header; tanpa credentials; tidak ada header respons yang diekspos |
+| Penyimpanan | Aplikasi tidak menyimpan file. Folder `storage/` harus dapat ditulis (log, cache, cache font DomPDF di `storage/fonts`), begitu juga folder temp PHP (unggahan spreadsheet) |
+| HTTPS | Urusan deployment; tidak diatur di repositori |
+
+<Aside type="caution" title="Belum ditentukan">
+URL produksi, kredensial database produksi, dan pembatasan origin CORS untuk produksi
+belum ditentukan di repositori. Ketiganya harus diatur oleh lingkungan deployment.
+</Aside>

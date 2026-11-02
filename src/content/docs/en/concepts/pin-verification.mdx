@@ -1,0 +1,136 @@
+---
+title: PIN verification
+description: How the customer PIN is stored and checked, the shared PIN lock, and the two withdrawal authorization modes.
+sidebar:
+  order: 5
+sources:
+  - app/Services/PinService.php
+  - app/Services/SettingsService.php
+  - app/Http/Controllers/API/Customer/AuthController.php
+  - config/bank.php
+  - docs/PIN_VERIFICATION.md
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+A customer PIN is 6 digits. It is used for customer login, to authorize withdrawals,
+and to change the PIN. Every PIN check runs in **one place**:
+`App\Services\PinService::verify()`.
+
+## Storage
+
+- `customers.pin` is cast `hashed` (bcrypt, `BCRYPT_ROUNDS=12`) and is a hidden
+  attribute (`$hidden`). No resource, error message or log contains the PIN.
+- The `withdrawal_authorizations` table **has no PIN column**.
+- The admin sets the initial PIN when opening the account. The admin can reset a PIN,
+  which also lifts a PIN lock. Customers can change their own PIN.
+
+## The shared PIN lock
+
+<Mermaid
+	caption="The wrong-PIN counter. Three mistakes in a row anywhere lock the PIN everywhere."
+	chart={`stateDiagram-v2
+  direction LR
+  [*] --> Normal
+  Normal --> Normal: correct PIN (counter reset to 0)
+  Normal --> Wrong1: wrong PIN
+  Wrong1 --> Wrong2: wrong PIN
+  Wrong1 --> Normal: correct PIN
+  Wrong2 --> Locked: 3rd wrong PIN
+  Wrong2 --> Normal: correct PIN
+  Locked --> Normal: 15 minutes pass or admin resets the PIN
+  note right of Locked
+    Even the correct PIN is refused.
+    pin_locked_until = now + 15 minutes
+  end note`}
+/>
+
+| Rule | Value |
+| --- | --- |
+| Mistakes before the lock | 3 in a row (`BANK_PIN_MAX_ATTEMPTS`) |
+| Lock duration | 15 minutes (`BANK_PIN_LOCK_MINUTES`) |
+| Applies to | Customer login, withdrawal approval in the app, withdrawal with the PIN at the counter, PIN change |
+| Counter reset | A correct PIN, or the admin setting a new PIN |
+| Columns | `pin_failed_attempts`, `pin_locked_until` |
+
+`PinService::verify()` runs in **its own database transaction** with a row lock on
+the customer, so a wrong attempt is saved even though the request fails. Callers with a
+bigger transaction (approval, counter withdrawal) call it **before** that transaction.
+
+<Aside type="caution" title="One lock everywhere">
+Three wrong PINs at login also lock withdrawal approval, and the other way round. The
+account number and the NIS lead to the same counter.
+</Aside>
+
+### Wrong-PIN responses
+
+<Tabs>
+<TabItem label="Login">
+Login does **not** reveal the remaining attempts:
+
+```json
+{ "message": "NIS/nomor rekening atau PIN salah.", "errors": { "identifier": ["NIS/nomor rekening atau PIN salah."] } }
+```
+
+From the third attempt until the lock ends (local time, WIB):
+
+```json
+{ "message": "Terlalu banyak percobaan PIN salah. Coba lagi pukul 09:15.", "errors": { "identifier": ["Terlalu banyak percobaan PIN salah. Coba lagi pukul 09:15."] } }
+```
+</TabItem>
+<TabItem label="Approval, withdrawal, PIN change">
+```json
+{ "message": "PIN salah. Sisa percobaan: 2.", "remaining_attempts": 2, "pin_locked_until": null }
+```
+
+When locked (`pin_locked_until` in UTC, the message in WIB):
+
+```json
+{
+  "message": "PIN diblokir sementara karena terlalu banyak percobaan salah. Coba lagi pukul 20:25.",
+  "remaining_attempts": 0,
+  "pin_locked_until": "2026-10-27T13:25:37.830610Z"
+}
+```
+</TabItem>
+</Tabs>
+
+## Two withdrawal authorization modes
+
+Every withdrawal needs the customer's PIN. **Who types the PIN, and on which device**,
+depends on the `withdrawal_verification` setting.
+
+| Mode | Setting value | How it works | Endpoints |
+| --- | --- | --- | --- |
+| **A · Approval in the app** (default) | `mobile` or `both` | The teller creates a request; the customer approves it with their PIN on their own phone; the teller completes it. The teller never sees or sends the PIN | `/api/teller/withdrawal-authorizations`, `/api/customer/withdrawal-authorizations` |
+| **B · PIN at the counter** | `terminal` or `both` | The customer types the PIN on the teller's screen; the withdrawal runs in one request | `POST /api/teller/withdrawals` |
+
+<Mermaid
+	caption="The withdrawal_verification setting decides which mode is active."
+	chart={`flowchart LR
+  S{"withdrawal_verification"} -- "mobile" --> A["Mode A only"]
+  S -- "terminal" --> B["Mode B only"]
+  S -- "both" --> AB["Mode A or B"]
+  A --> A1["POST /teller/withdrawals<br/>refused 422"]
+  B --> B1["POST /teller/withdrawal-authorizations<br/>refused 422"]`}
+/>
+
+Mode B is off by default because the PIN passes through the teller's client. Mode B
+also has limitation **L2**: the PIN is checked before the shift, account status and
+balance, so a wrong PIN still counts even when the withdrawal would fail anyway. Mode
+A does not have this problem because everything is checked when the request is
+created.
+
+Full flows:
+
+- [PIN approval in the app (Mode A)](/en/workflows/withdrawal-pin-authorization/)
+- [Cash withdrawal with the PIN at the counter (Mode B)](/en/workflows/withdrawal/)
+- [Security considerations](/en/reference/security/)
+
+## Not available
+
+- Forgot-PIN by the customer. PINs are reset by the admin.
+- Push notifications for withdrawal requests (polling is used).
+- Approval in the app for deposits or corrections (withdrawals only).
+- Per-device customer tokens: any device where the customer is logged in can approve.

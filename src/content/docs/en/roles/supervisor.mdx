@@ -1,0 +1,38 @@
+---
+title: Supervisor
+description: What the supervisor can and cannot do, with the endpoints they use.
+sidebar:
+  order: 2
+sources:
+  - docs/RBAC.md
+  - routes/api.php
+---
+
+**Role:** `supervisor` (`users` table). **Client:** staff web app. **Focus:**
+authorizing physical cash, reviewing daily reports, and operational oversight.
+
+## Can
+
+| Capability | Endpoints |
+| --- | --- |
+| View every teller's daily reports (open shifts show live totals) | `GET /api/supervisor/daily-reports`, `/{id}` |
+| Approve a report (cash moves to the vault), hold it, or reject it (the shift reopens) | `POST /api/supervisor/daily-reports/{id}/approve`, `/hold`, `/reject` |
+| Print the daily report PDF | `GET /api/supervisor/daily-reports/{id}/export` |
+| View the vault ledger | `GET /api/supervisor/cash-transfers`, `/{id}` |
+| Authorize a teller's correction by typing their own username and password on the teller's screen | — (through the teller's `POST /api/teller/transactions/{id}/correct`) |
+| Read the audit log, journal and trial balance | `GET /api/audit/*` |
+| Download the journal, audit trail, statement and annual report PDFs | `…/export`, `GET /api/customers/{id}/statement`, `GET /api/reports/annual` |
+| List staff and accounts | `GET /api/staff`, `GET /api/customers` |
+| Read majors and settings | `GET /api/majors`, `GET /api/settings` |
+
+## Cannot
+
+- Create or edit staff or accounts; change settings.
+- Record transactions or run shifts; call the correction endpoint themselves.
+- Print customer cards.
+- Bulk-approve reports (reports are reviewed one at a time).
+- See a dedicated list of withdrawal authorization requests (the authorization shows on
+  the audit transaction detail).
+
+Related: [Shifts and daily reports](/en/workflows/shift-management/) ·
+[Correcting a transaction](/en/workflows/correction/) · [Supervisor API](/en/api/supervisor/)

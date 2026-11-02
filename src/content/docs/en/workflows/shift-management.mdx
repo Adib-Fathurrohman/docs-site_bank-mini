@@ -1,0 +1,150 @@
+---
+title: Shifts and daily reports
+description: Opening a shift with a cash count, closing it with physical cash reconciliation, and the supervisor's review of the daily report until the cash moves to the vault.
+sidebar:
+  order: 3
+sources:
+  - app/Services/DailyReportService.php
+  - app/Http/Controllers/API/Teller/ShiftController.php
+  - app/Http/Controllers/API/Supervisor/DailyReportController.php
+  - docs/WORKFLOWS.md
+  - docs/API.md
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+A teller works inside a **shift**: one working session per day, which is also the
+**daily report** (`daily_reports`). Every transaction belongs to one shift.
+
+## Report statuses
+
+<Mermaid
+	caption="Daily report statuses and who changes them."
+	chart={`stateDiagram-v2
+  direction LR
+  [*] --> open: teller opens the shift
+  open --> submitted: teller closes (physical cash = system balance)
+  submitted --> approved: supervisor approves
+  submitted --> on_hold: supervisor holds (note required)
+  submitted --> rejected: supervisor rejects (note required)
+  on_hold --> approved: supervisor approves
+  on_hold --> rejected: supervisor rejects
+  rejected --> submitted: teller closes again
+  approved --> [*]
+  note right of approved
+    final · cash moved to the vault
+  end note`}
+/>
+
+| Status | Meaning | Teller can transact | Next |
+| --- | --- | --- | --- |
+| `open` | Shift running | Yes, if `report_date` is today | `submitted` |
+| `submitted` | Closed with matching cash; waiting for the supervisor | No | `approved`, `on_hold`, `rejected` |
+| `on_hold` | Supervisor is waiting for something (the note explains) | No | `approved`, `rejected` |
+| `rejected` | Sent back; the shift is active again for correction and re-closing | Yes, if `report_date` is today; corrections any day | `submitted` |
+| `approved` | Final; cash moved to the vault | No | — |
+
+An **active** shift is one with status `open` or `rejected`.
+
+## 1. Opening a shift
+
+| | |
+| --- | --- |
+| Endpoint | `POST /api/teller/shift/open` |
+| Preconditions | No active shift for this teller; no shift dated today yet |
+| Input | The drawer count per denomination |
+| Database effect | A `daily_reports` row (status `open`, `report_date` today, `opening_balance` = Σ denomination × quantity); `cash_counts` rows at stage `opening` for quantities > 0 |
+| Response | `201` DailyReport with zero totals and `opening_counts` |
+
+```json title="Body: count per denomination (Rp50.000 × 2 + Rp10.000 × 5 = Rp150.000)"
+{ "denominations": { "50000": 2, "10000": 5 } }
+```
+
+Accepted denominations: `100000`, `50000`, `20000`, `10000`, `5000`, `2000`, `1000`,
+`500`, `200`, `100`. Quantity per denomination 0–100,000.
+
+| `422` message | Cause |
+| --- | --- |
+| `Shift tanggal 2026-10-26 masih berjalan. Tutup shift tersebut terlebih dahulu.` | An older shift is still open |
+| `Shift hari ini sudah ditutup dan tidak dapat dibuka lagi.` | Today's shift is already closed |
+
+`GET /api/teller/shift` returns the active shift with **live totals** and its
+transactions, plus `can_transact` (`true` when `report_date` is today). Without an
+active shift: `{ "data": null, "can_transact": false, "closed_today": false }`.
+
+## 2. Transacting
+
+Deposits, withdrawals and corrections can only be recorded in an active shift.
+Deposits and withdrawals also need the shift to be dated **today**; a shift from an
+earlier day can only be closed.
+
+## 3. Closing a shift (cash reconciliation)
+
+<Steps>
+
+1. The teller counts the drawer per denomination and sends
+   `POST /api/teller/shift/close`.
+2. The backend locks the teller and the shift, then computes the totals from the
+   shift's transactions (net of corrections):
+
+   ```text
+   system balance = opening balance + total deposits − total withdrawals
+   ```
+
+3. If **physical cash = system balance**: the totals are saved as a snapshot, the
+   status becomes `submitted`, the previous closing count is replaced, and any
+   withdrawal requests still open in this shift are cancelled
+   (`cancel_reason: shift_closed`).
+4. If they differ: **nothing is saved** and the shift stays open.
+
+</Steps>
+
+```json title="422 — physical cash does not match (example from the demo database)"
+{
+  "message": "Uang fisik kurang Rp2.000 dari saldo sistem. Periksa ulang hitungan dan slip; laporan tidak dapat ditutup atau dicetak sampai sesuai.",
+  "system_balance": 252000,
+  "physical_balance": 250000,
+  "difference": -2000
+}
+```
+
+After closing, deposits and withdrawals for that day are refused until a supervisor
+rejects the report. A new shift can only be opened on a later date. The daily report
+PDF (`GET /api/teller/daily-reports/{id}/export`) is only available for `submitted`,
+`on_hold` and `approved` reports.
+
+<Aside type="caution" title="L1 · Odd amounts make a shift impossible to close">
+Cash can only be counted in denominations of Rp100 or more. A transaction like Rp150
+makes the system balance impossible to match until that transaction is corrected.
+</Aside>
+
+## 4. Supervisor review
+
+Supervisors review reports **one at a time** (no bulk approval).
+
+| Decision | Endpoint | From status | Note | Effect |
+| --- | --- | --- | --- | --- |
+| Approve | `POST /api/supervisor/daily-reports/{id}/approve` | `submitted`, `on_hold` | Optional | Final. Records the cash moving from the teller's drawer to the vault (`cash_transfers`, amount = `physical_balance`, if > 0) |
+| Hold | `POST /api/supervisor/daily-reports/{id}/hold` | `submitted` | Required | `on_hold`. The teller can still open the next day's shift |
+| Reject | `POST /api/supervisor/daily-reports/{id}/reject` | `submitted`, `on_hold` | Required | `rejected`: the shift is active again to be corrected and closed again. Refused while the teller is running another shift |
+
+Each decision locks the report. Possible `422` messages:
+`Laporan berstatus "disetujui" tidak dapat diproses.`, `Laporan ini sudah ditahan.`,
+`Teller sedang menjalankan shift lain…`, or a missing note.
+
+<Aside type="note" title="Limitation L3 · Stale values on a rejected shift">
+After a rejection, the reopened shift still shows the previous count's
+`physical_balance`, `difference` and `closing_counts` until it is closed again.
+</Aside>
+
+## Vault ledger
+
+`GET /api/supervisor/cash-transfers` (filters `from`, `to`, `teller_id`, with
+`total_amount`) and `GET /api/supervisor/cash-transfers/{id}` show the cash moved to
+the vault. Read-only.
+
+Moving cash from the vault to a teller (for example as opening cash) is **not
+available**; opening balances are simply counted by the teller.
+
+Full endpoints: [Teller API](/en/api/teller/) and [Supervisor API](/en/api/supervisor/).

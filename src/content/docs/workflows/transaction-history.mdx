@@ -1,0 +1,75 @@
+---
+title: Riwayat transaksi dan laporan
+description: Semua cara membaca riwayat transaksi per aktor, filter yang tersedia, dan laporan PDF yang dihasilkan backend.
+sidebar:
+  order: 8
+sources:
+  - app/Http/Controllers/API/Teller/TransactionController.php
+  - app/Http/Controllers/API/Audit/TransactionController.php
+  - app/Http/Controllers/API/Customer/AccountController.php
+  - app/Services/PdfReportService.php
+  - docs/WORKFLOWS.md
+  - docs/API.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Semua tampilan riwayat bersifat **hanya baca**. Setiap aktor hanya melihat data yang
+boleh ia lihat.
+
+## Tampilan per aktor
+
+| Tampilan | Aktor | Endpoint | Cakupan dan filter |
+| --- | --- | --- | --- |
+| Pekerjaan hari ini | Teller | `GET /api/teller/transactions?date=` | Transaksi sendiri untuk satu tanggal (bawaan hari ini), terbaru dulu, 50 per halaman, dengan `corrected_by` dan `authorized_by` |
+| Shift berjalan | Teller | `GET /api/teller/shift` | Transaksi shift aktif, terlama dulu |
+| Riwayat shift | Teller | `GET /api/teller/daily-reports`, `/{id}` | Shift sendiri; detail berisi transaksi shift |
+| Log audit | Admin, Supervisor | `GET /api/audit/transactions` | Semua transaksi; filter `from`, `to` (tanggal atau tanggal-jam), `teller`, `customer`, `type`, `teller_id`, `customer_id` |
+| Satu transaksi | Admin, Supervisor | `GET /api/audit/transactions/{id}` | Dengan baris jurnal, tautan koreksi, dan otorisasi penarikan |
+| Mutasi nasabah | Nasabah | `GET /api/customer/transactions` | Baris milik sendiri; filter `from`, `to`, `type`; 20 per halaman |
+
+Baris mutasi nasabah tidak memuat teller atau jurnal:
+
+```json title="GET /api/customer/transactions — contoh dari basis data demo"
+{
+  "data": [
+    { "id": 5, "type": "withdrawal", "direction": "out", "description": "Tarik tunai", "amount": 30000, "balance_after": 595000, "created_at": "2026-10-27T13:10:37.000000Z" },
+    { "id": 4, "type": "deposit", "direction": "in", "description": "Setor tunai", "amount": 125000, "balance_after": 625000, "created_at": "2026-10-27T13:10:36.000000Z" }
+  ]
+}
+```
+
+## Laporan PDF
+
+Semua ekspor berbentuk PDF agar mudah dibaca dan dicetak (bukan CSV). Ekspor daftar
+mencetak maksimal 5.000 baris dan menyebutkan jika terpotong.
+
+| Laporan | Endpoint | Aktor | Isi |
+| --- | --- | --- | --- |
+| Struk | `GET /api/teller/transactions/{id}/receipt` | Teller (milik sendiri) | Kertas 80 mm: nomor, tanggal, rekening, nama, kelas, nominal, terbilang, saldo akhir, teller, tanda tangan |
+| Laporan harian | `GET /api/teller/daily-reports/{id}/export`, `GET /api/supervisor/daily-reports/{id}/export` | Teller (milik sendiri), Supervisor | Rekap, tabel pecahan, transaksi, tanda tangan. Terkunci sampai shift ditutup dengan uang yang cocok |
+| Mutasi (kartu simpanan) | `GET /api/customers/{id}/statement?from=&to=` | Admin, Supervisor | Saldo awal, setiap baris dengan saldo berjalan, total |
+| Mutasi sendiri | `GET /api/customer/statement/export?from=&to=` | Nasabah | Sama, untuk rekening sendiri |
+| Jurnal akuntansi | `GET /api/audit/journals/export` | Admin, Supervisor | Total per akun, pemeriksaan keseimbangan, setiap baris jurnal |
+| Jejak audit | `GET /api/audit/transactions/export` | Admin, Supervisor | Saldo sebelum/sesudah dan referensi koreksi |
+| Laporan tahunan | `GET /api/reports/annual?school_year=2026` | Admin, Supervisor | Satu tahun ajaran (Juli–Juni): saldo per produk dan per rekening |
+
+<Aside type="tip" title="Mengunduh PDF">
+Respons sukses bertipe `application/pdf`. Jika ditolak, responsnya JSON dengan
+`message`. Minta respons sebagai blob, lalu periksa `Content-Type` sebelum
+menampilkannya.
+</Aside>
+
+<Aside type="note" title="Keterbatasan L10 · Laporan tahunan hanya PDF">
+Laporan tahunan, laporan jurnal, dan ekspor audit hanya tersedia sebagai PDF. Tabel di
+layar dapat dibangun dari endpoint JSON `/api/audit/*`.
+</Aside>
+
+## Urutan dan halaman
+
+- Daftar tidak punya parameter urutan; urutannya tetap per endpoint (keterbatasan L18).
+- `?page=` dan `?per_page=` (1–100, dibatasi otomatis) tersedia di daftar yang
+  dipaginasi. Lihat [Ikhtisar API](/api/#paginasi).
+
+Endpoint lengkap: [API Audit & laporan](/api/audit-and-reports/),
+[API Teller](/api/teller/), dan [API Nasabah](/api/customer/).

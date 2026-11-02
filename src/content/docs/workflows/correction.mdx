@@ -1,0 +1,105 @@
+---
+title: Koreksi transaksi
+description: Membatalkan setoran atau penarikan yang salah dengan transaksi koreksi yang diotorisasi supervisor.
+sidebar:
+  order: 7
+sources:
+  - app/Http/Controllers/API/Teller/TransactionController.php
+  - app/Services/TransactionService.php
+  - app/Services/DailyReportService.php
+  - docs/WORKFLOWS.md
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+import Mermaid from '../../../components/Mermaid.astro';
+
+Transaksi yang tersimpan tidak pernah diubah. Salah ketik dibatalkan dengan
+**transaksi koreksi**, lalu teller mencatat nominal yang benar sebagai transaksi
+baru.
+
+## Ringkasan
+
+| | |
+| --- | --- |
+| Aktor | Teller, diotorisasi supervisor |
+| Endpoint | `POST /api/teller/transactions/{id}/correct` |
+| Prasyarat | Transaksi asli adalah `deposit`/`withdrawal` milik teller sendiri; belum pernah dikoreksi; shift asalnya masih aktif (`open` atau `rejected`) dan merupakan shift aktif teller |
+| Input | `reason` (maks. 255), `supervisor_username`, `supervisor_password` |
+| Batas | 10 permintaan per menit per teller; mendukung `Idempotency-Key` |
+
+## Alur
+
+<Mermaid
+	caption="Supervisor mengetik kredensialnya di layar teller; supervisor tidak memanggil endpoint ini sendiri."
+	chart={`sequenceDiagram
+  autonumber
+  participant T as Teller
+  participant S as Supervisor
+  participant A as API
+  participant D as Database
+  T->>S: meminta otorisasi koreksi
+  S->>T: mengetik username + password di layar teller
+  T->>A: POST /teller/transactions/{id}/correct {reason, supervisor_username, supervisor_password}
+  A->>A: validasi supervisor aktif + password
+  A->>D: lock teller → shift (harus shift transaksi asli) → transaksi asli → nasabah
+  A->>D: cek belum dikoreksi · balik saldo · insert koreksi · jurnal berlawanan
+  A-->>T: 201 Transaction (corrects_transaction_id, authorized_by)`}
+/>
+
+<Steps>
+
+1. Teller memilih transaksi dari shift yang sedang berjalan dan mengisi alasan.
+2. Supervisor mengetik username dan password-nya sendiri.
+3. Backend membuat transaksi baru dengan nominal sama dan arah berlawanan
+   (`deposit_correction` atau `withdrawal_correction`), dengan `note` = alasan dan
+   `authorized_by` = supervisor.
+4. Teller mencatat nominal yang benar sebagai setoran atau penarikan baru.
+
+</Steps>
+
+```json title="Body"
+{ "reason": "Salah ketik, seharusnya Rp7.000", "supervisor_username": "supervisor", "supervisor_password": "password" }
+```
+
+```json title="201 — contoh respons dari basis data demo"
+{
+  "data": {
+    "id": 7, "type": "deposit_correction", "type_label": "Koreksi setoran",
+    "amount": 70000, "amount_in_words": "tujuh puluh ribu rupiah",
+    "balance_before": 1070000, "balance_after": 1000000,
+    "created_at": "2026-10-27T13:10:38.000000Z", "daily_report_id": 2,
+    "corrects_transaction_id": 6, "note": "Salah ketik, seharusnya Rp7.000",
+    "authorized_by": { "id": 2, "full_name": "Supervisor Bank Mini" },
+    "customer": { "id": 3, "account_number": "RPL-2026-002", "full_name": "Citra Lestari" }
+  }
+}
+```
+
+## Aturan
+
+| Aturan | Akibat jika dilanggar |
+| --- | --- |
+| Hanya transaksi milik teller sendiri | `404` |
+| Satu transaksi hanya dapat dikoreksi sekali | `422 Transaksi ini sudah pernah dikoreksi.` |
+| Transaksi koreksi tidak dapat dikoreksi | `422 Transaksi koreksi tidak dapat dikoreksi lagi.` |
+| Hanya di shift tempat transaksi asli dicatat, selama shift itu aktif | `422 Koreksi hanya dapat dilakukan pada shift tempat transaksi asli dicatat, …` |
+| Kredensial supervisor aktif yang benar | `422` dengan `errors.supervisor_password` = `Otorisasi supervisor gagal. …` |
+| Koreksi setoran tidak boleh membuat saldo negatif | `422 Saldo nasabah sudah tidak mencukupi untuk membatalkan setoran ini.` |
+| Rekening `active` atau `suspended` | Boleh pada rekening yang ditangguhkan |
+| Maksimal 10 per menit | `429` |
+
+Koreksi setoran boleh membuat saldo **di bawah saldo minimum**, tetapi tidak di bawah
+nol. Total shift dihitung bersih dari koreksi, sehingga laci tetap cocok saat penutupan.
+
+<Aside type="note" title="Koreksi setelah laporan ditolak">
+Jika supervisor menolak laporan harian, shift kembali aktif dan transaksinya dapat
+dikoreksi lagi, pada hari apa pun, sampai shift ditutup ulang.
+</Aside>
+
+## Yang belum tersedia
+
+- Koreksi sebagian (koreksi selalu membalik nominal penuh).
+- Mengubah atau menghapus transaksi.
+- Persetujuan koreksi di aplikasi nasabah.
+
+Endpoint lengkap: [API Teller](/api/teller/#koreksi).

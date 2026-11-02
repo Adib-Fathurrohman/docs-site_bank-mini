@@ -1,0 +1,74 @@
+---
+title: Transaction history and reports
+description: Every way to read transaction history per actor, the available filters, and the PDF reports the backend produces.
+sidebar:
+  order: 8
+sources:
+  - app/Http/Controllers/API/Teller/TransactionController.php
+  - app/Http/Controllers/API/Audit/TransactionController.php
+  - app/Http/Controllers/API/Customer/AccountController.php
+  - app/Services/PdfReportService.php
+  - docs/WORKFLOWS.md
+  - docs/API.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Every history view is **read-only**. Each actor only sees the data they are allowed to
+see.
+
+## Views per actor
+
+| View | Actor | Endpoint | Scope and filters |
+| --- | --- | --- | --- |
+| Today's work | Teller | `GET /api/teller/transactions?date=` | Own transactions for one date (default today), newest first, 50 per page, with `corrected_by` and `authorized_by` |
+| Current shift | Teller | `GET /api/teller/shift` | Transactions of the active shift, oldest first |
+| Shift history | Teller | `GET /api/teller/daily-reports`, `/{id}` | Own shifts; the detail includes the shift's transactions |
+| Audit log | Admin, Supervisor | `GET /api/audit/transactions` | All transactions; filters `from`, `to` (date or date-time), `teller`, `customer`, `type`, `teller_id`, `customer_id` |
+| One transaction | Admin, Supervisor | `GET /api/audit/transactions/{id}` | With journal lines, correction links and withdrawal authorization |
+| Customer statement | Customer | `GET /api/customer/transactions` | Own lines; filters `from`, `to`, `type`; 20 per page |
+
+Customer statement lines leave out tellers and journals:
+
+```json title="GET /api/customer/transactions — example from the demo database"
+{
+  "data": [
+    { "id": 5, "type": "withdrawal", "direction": "out", "description": "Tarik tunai", "amount": 30000, "balance_after": 595000, "created_at": "2026-10-27T13:10:37.000000Z" },
+    { "id": 4, "type": "deposit", "direction": "in", "description": "Setor tunai", "amount": 125000, "balance_after": 625000, "created_at": "2026-10-27T13:10:36.000000Z" }
+  ]
+}
+```
+
+## PDF reports
+
+Every export is a PDF so it is easy to read and print (not CSV). List exports print at
+most 5,000 rows and say so when truncated.
+
+| Report | Endpoint | Actor | Content |
+| --- | --- | --- | --- |
+| Receipt | `GET /api/teller/transactions/{id}/receipt` | Teller (own) | 80 mm paper: number, date, account, name, class, amount, amount in words, balance after, teller, signatures |
+| Daily report | `GET /api/teller/daily-reports/{id}/export`, `GET /api/supervisor/daily-reports/{id}/export` | Teller (own), Supervisor | Recap, denomination tables, transactions, signatures. Locked until the shift is closed with matching cash |
+| Statement (savings card) | `GET /api/customers/{id}/statement?from=&to=` | Admin, Supervisor | Opening balance, every line with a running balance, totals |
+| Own statement | `GET /api/customer/statement/export?from=&to=` | Customer | The same, for the customer's own account |
+| Accounting journal | `GET /api/audit/journals/export` | Admin, Supervisor | Totals per account, balance check, every journal line |
+| Audit trail | `GET /api/audit/transactions/export` | Admin, Supervisor | Balances before/after and correction references |
+| Annual report | `GET /api/reports/annual?school_year=2026` | Admin, Supervisor | One school year (July–June): balances per product and per account |
+
+<Aside type="tip" title="Downloading PDFs">
+A successful response is `application/pdf`. A refusal is JSON with a `message`.
+Request the response as a blob and check `Content-Type` before showing it.
+</Aside>
+
+<Aside type="note" title="Limitation L10 · The annual report is PDF-only">
+The annual report, journal report and audit export exist only as PDFs. On-screen
+tables can be built from the `/api/audit/*` JSON endpoints.
+</Aside>
+
+## Order and pages
+
+- Lists have no sort parameters; the order is fixed per endpoint (limitation L18).
+- `?page=` and `?per_page=` (1–100, clamped) are available on paginated lists. See
+  [API overview](/en/api/#pagination).
+
+Full endpoints: [Audit & reports API](/en/api/audit-and-reports/),
+[Teller API](/en/api/teller/) and [Customer API](/en/api/customer/).

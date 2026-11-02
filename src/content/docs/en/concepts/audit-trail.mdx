@@ -1,0 +1,96 @@
+---
+title: Audit trail and accounting journal
+description: The automatic double-entry journal, data that cannot be changed, database protections, and how to read the audit trail.
+sidebar:
+  order: 6
+sources:
+  - app/Services/JournalService.php
+  - app/Http/Controllers/API/Audit
+  - database/migrations
+  - docs/API.md
+  - docs/DATA_MODEL.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+## Double-entry journal
+
+Every transaction automatically writes **exactly two journal lines**
+(`accounting_journals`): one debit and one credit, each for the transaction amount.
+`JournalService::record()` writes them inside the same database transaction as the
+balance change.
+
+There are only two accounts:
+
+| Code | Name | Meaning |
+| --- | --- | --- |
+| `101` | Kas | Cash held by the mini bank |
+| `201` | Tabungan Nasabah | What the bank owes customers (savings balances) |
+
+| Transaction | Debit | Credit |
+| --- | --- | --- |
+| `deposit` | 101 Kas | 201 Tabungan Nasabah |
+| `withdrawal` | 201 Tabungan Nasabah | 101 Kas |
+| `deposit_correction` | 201 Tabungan Nasabah | 101 Kas |
+| `withdrawal_correction` | 101 Kas | 201 Tabungan Nasabah |
+
+<Mermaid
+	caption="Illustration: a Rp125.000 deposit produces one transaction and two journal lines."
+	chart={`flowchart LR
+  T["Transaction #4<br/>deposit · Rp125.000"] --> D["Journal: 101 Kas<br/>debit Rp125.000"]
+  T --> K["Journal: 201 Tabungan Nasabah<br/>credit Rp125.000"]`}
+/>
+
+Because every transaction balances, total debits always equal total credits.
+`GET /api/audit/journals/summary` returns the trial balance per account with
+`is_balanced`.
+
+## What cannot be changed
+
+| Data | Protection |
+| --- | --- |
+| Transactions | No edit/delete endpoints; model guards; corrections are new transactions |
+| Journal lines | No write endpoints (`405` for other methods); model guards |
+| Approved daily reports | Final; model guard |
+| Cash transfers to the vault | Immutable |
+| Finished withdrawal authorizations | The model refuses updates to final statuses and refuses deletes |
+| Staff with history | Can only be blocked, not deleted (`409`) |
+
+## Database protections
+
+| Mechanism | Example |
+| --- | --- |
+| Foreign keys `ON DELETE RESTRICT` | Anything with history cannot be deleted |
+| `CHECK amount > 0` | `transactions`, `accounting_journals`, `cash_transfers`, `withdrawal_authorizations` |
+| `CHECK balance >= 0` | `customers` |
+| Journal position `CHECK` | `position IN ('debit','credit')` |
+| Correction link `CHECK` | A correction must reference its original and a supervisor |
+| Unique keys | One debit and one credit per transaction (`transaction_id`, `position`); one correction per transaction |
+
+## Reading the audit trail
+
+Admins and supervisors can read the transaction log and the journal. No endpoint
+writes transactions or journal lines.
+
+| Need | Endpoint |
+| --- | --- |
+| Transaction log (newest first) | `GET /api/audit/transactions` |
+| One transaction with journal lines, correction links and withdrawal authorization | `GET /api/audit/transactions/{id}` |
+| Journal lines | `GET /api/audit/journals` |
+| Trial balance | `GET /api/audit/journals/summary` |
+| Audit trail / journal report PDF | `GET /api/audit/transactions/export`, `GET /api/audit/journals/export` |
+
+Shared filters: date range (`from`, `to`, date or date-time), teller name or username,
+customer name/account number/NIS, transaction type, and teller and customer ids. See
+[Audit & reports API](/en/api/audit-and-reports/).
+
+The transaction detail shows who authorized a correction (`authorized_by`), which
+correction reversed it (`corrected_by`) and, for withdrawals approved in the app,
+`withdrawal_authorization` (`{ id, method: "mobile", approved_at }`).
+
+<Aside type="note" title="No authorization list for admins/supervisors">
+Withdrawal requests have no dedicated list for admins or supervisors. The
+authorization is visible on the audit transaction detail (decision D7 in
+`docs/PIN_VERIFICATION.md`).
+</Aside>

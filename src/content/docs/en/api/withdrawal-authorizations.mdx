@@ -1,0 +1,203 @@
+---
+title: Withdrawal authorizations
+description: Endpoints for withdrawal approval in the app (Mode A), on the teller side and the customer side.
+sidebar:
+  order: 5
+sources:
+  - routes/api.php
+  - app/Http/Controllers/API/Teller/WithdrawalAuthorizationController.php
+  - app/Http/Controllers/API/Customer/WithdrawalAuthorizationController.php
+  - app/Http/Resources/WithdrawalAuthorizationResource.php
+  - app/Http/Resources/CustomerWithdrawalAuthorizationResource.php
+  - docs/API.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Endpoint from '../../../../components/Endpoint.astro';
+
+The teller starts a withdrawal, the customer approves it **in the app with their
+PIN**, and the teller completes it. Requires the `withdrawal_verification` setting
+`mobile` (default) or `both`. Flow and diagrams: [PIN approval in the app](/en/workflows/withdrawal-pin-authorization/).
+
+```text
+teller    POST /teller/withdrawal-authorizations                → pending   (120 s to approve)
+customer  POST /customer/withdrawal-authorizations/{id}/approve → approved  (120 s to complete)
+teller    POST /teller/withdrawal-authorizations/{id}/complete  → consumed + Transaction
+```
+
+## General rules
+
+- `{id}` is the request's ULID (`data.id`). The integer key is never exposed.
+- Another teller's or customer's request answers **404**.
+- Every response has `server_time` for a countdown to `expires_at` /
+  `approval_expires_at`.
+- Only `pending` and `approved` are "open". One open request per teller and per
+  customer.
+- Polling, not push: the teller polls `GET …/{id}` (every 2 s is fine); the app polls
+  its list while open.
+
+**422** when a step is not possible in the current status; `status` is included when the
+message is about a specific request:
+
+```json
+{ "message": "Permintaan penarikan ini berstatus \"selesai\" dan tidak dapat diproses.", "status": "consumed" }
+```
+
+## Teller side
+
+<Endpoint method="POST" path="/api/teller/withdrawal-authorizations" roles="teller" limit="10/min per teller" />
+
+| Field | Rules |
+| --- | --- |
+| `account_number` | Required, an existing account that is not closed |
+| `amount` | Required, integer 1 – 100,000,000 |
+
+Checks everything the withdrawal will need **before** the customer is asked: an open
+shift for today, account `active`, PIN not locked, `balance − amount ≥ min_balance`, no
+other open request of this teller, and no open request for this customer. No money
+moves.
+
+```json title="201 — example from the demo database"
+{
+  "data": {
+    "id": "01M6AMM4CNBR52V8MKC0JEDPJM", "status": "pending",
+    "status_label": "Menunggu persetujuan nasabah",
+    "amount": 50000, "amount_in_words": "lima puluh ribu rupiah",
+    "customer": { "id": 1, "account_number": "RPL-2026-001", "full_name": "Budi Santoso", "class": "X" },
+    "daily_report_id": 2,
+    "created_at": "2026-11-01T04:07:01.000000Z", "expires_at": "2026-11-01T04:09:01.000000Z",
+    "approved_at": null, "approval_expires_at": null, "rejected_at": null,
+    "cancelled_at": null, "cancel_reason": null, "consumed_at": null, "transaction_id": null,
+    "server_time": "2026-11-01T04:07:01.782795Z"
+  }
+}
+```
+
+**422** in addition to the deposit errors (shift, suspended account), the minimum
+balance and the PIN lock:
+
+| Message | Cause |
+| --- | --- |
+| `Masih ada permintaan penarikan yang belum selesai. Selesaikan atau batalkan terlebih dahulu.` | This teller already has an open request |
+| `Nasabah ini masih memiliki permintaan penarikan yang belum selesai.` | The customer already has an open request (from any teller) |
+| `Persetujuan penarikan melalui aplikasi nasabah sedang tidak diaktifkan.` | Setting is `terminal` |
+
+<Endpoint method="GET" path="/api/teller/withdrawal-authorizations" roles="teller" limit="120/min per actor" />
+
+<Endpoint method="GET" path="/api/teller/withdrawal-authorizations/{withdrawalAuthorization}" roles="teller" limit="120/min per actor" />
+
+The list returns the teller's own requests created today, newest first (paginated,
+default `per_page` 15). `?status=open` returns only the open one, to resume the waiting
+screen after a page reload. `GET …/{id}` is the polling endpoint; it returns the same
+object with the current status (expiry is applied on read).
+
+<Endpoint method="POST" path="/api/teller/withdrawal-authorizations/{withdrawalAuthorization}/cancel" roles="teller" limit="120/min per actor" />
+
+`pending` or `approved` → `cancelled` (`cancel_reason: "teller"`). **200** with the
+request. **422** if it is already finished.
+
+<Endpoint method="POST" path="/api/teller/withdrawal-authorizations/{withdrawalAuthorization}/complete" roles="teller" limit="120/min per actor" />
+
+Executes the approved withdrawal for the account and amount **stored in the request**
+(nothing is taken from the body). In one database transaction: lock the teller and
+shift, lock the request (must be `approved`, not past `approval_expires_at`, same
+shift), lock the customer, check the status and minimum balance again, record the
+withdrawal, mark the request `consumed`, write the journal. Any failure rolls everything
+back; the request stays `approved` and can be retried until it expires.
+
+**201** a [Transaction](/en/api/teller/#transaction-object) the first time; **200**
+with the same transaction if called again (safe to retry after a timeout, no
+`Idempotency-Key` needed):
+
+```json title="201 — example from the demo database"
+{
+  "data": {
+    "id": 4, "type": "withdrawal", "type_label": "Tarik tunai",
+    "amount": 50000, "amount_in_words": "lima puluh ribu rupiah",
+    "balance_before": 500000, "balance_after": 450000,
+    "created_at": "2026-11-01T04:07:02.000000Z", "daily_report_id": 2,
+    "corrects_transaction_id": null, "note": null,
+    "withdrawal_authorization": { "id": "01M6AMM4CNBR52V8MKC0JEDPJM", "method": "mobile", "approved_at": "2026-11-01T04:07:02.000000Z" },
+    "customer": { "id": 1, "account_number": "RPL-2026-001", "full_name": "Budi Santoso" }
+  }
+}
+```
+
+**422:** not approved yet (`status: "pending"`), finished, approval expired
+(`Persetujuan nasabah sudah kedaluwarsa. Buat permintaan penarikan baru.`), shift closed
+or a different shift (`Permintaan penarikan ini dibuat pada shift lain.`), or the
+balance no longer allows it.
+
+## Customer side
+
+<Endpoint method="GET" path="/api/customer/withdrawal-authorizations" roles="customer" limit="120/min per actor" />
+
+<Endpoint method="GET" path="/api/customer/withdrawal-authorizations/{withdrawalAuthorization}" roles="customer" limit="120/min per actor" />
+
+The customer's own **open** requests (not paginated), or one own request in any status.
+`balance_after` previews the balance after the withdrawal (`null` once the request is no
+longer open).
+
+```json title="200 — example from the demo database"
+{
+  "data": [
+    {
+      "id": "01M6AMM4CNBR52V8MKC0JEDPJM", "status": "pending",
+      "status_label": "Menunggu persetujuan nasabah",
+      "amount": 50000, "amount_in_words": "lima puluh ribu rupiah",
+      "account_number": "RPL-2026-001", "balance": 500000, "balance_after": 450000,
+      "teller": { "full_name": "Teller Loket 1" },
+      "created_at": "2026-11-01T04:07:01.000000Z", "expires_at": "2026-11-01T04:09:01.000000Z",
+      "approved_at": null, "approval_expires_at": null, "consumed_at": null,
+      "server_time": "2026-11-01T04:07:01.909918Z"
+    }
+  ]
+}
+```
+
+<Endpoint method="POST" path="/api/customer/withdrawal-authorizations/{withdrawalAuthorization}/approve" roles="customer" limit="5/min per customer" />
+
+| Field | Rules |
+| --- | --- |
+| `pin` | Required, exactly 6 digits |
+
+Checks the PIN with the shared counter, then `pending` → `approved`
+(`approval_expires_at` = now + 120 s). **200** with the request (`status: "approved"`).
+The PIN is never stored or echoed.
+
+**422:** wrong PIN (the request stays `pending` and can be approved with the right PIN):
+
+```json
+{ "message": "PIN salah. Sisa percobaan: 2.", "remaining_attempts": 2, "pin_locked_until": null }
+```
+
+Also **422** when the PIN is locked (`remaining_attempts: 0`, `pin_locked_until` set),
+the request is no longer `pending` (`status` included), or the account is suspended.
+Staff tokens get **403**.
+
+<Endpoint method="POST" path="/api/customer/withdrawal-authorizations/{withdrawalAuthorization}/reject" roles="customer" limit="5/min per customer" />
+
+`pending` → `rejected`. **200** with the request. **422** if it is no longer `pending`.
+
+## Request object
+
+| Field | Side | Notes |
+| --- | --- | --- |
+| `id` | Both | ULID (`public_id` column) |
+| `status`, `status_label` | Both | See the statuses above; Indonesian label |
+| `amount`, `amount_in_words` | Both | The amount bound to the request |
+| `customer` | Teller | `{ id, account_number, full_name, class }` |
+| `account_number`, `balance`, `balance_after` | Customer | `balance_after` is a preview, `null` when not open |
+| `teller` | Customer | `{ full_name }` |
+| `daily_report_id` | Teller | The shift the request was created in |
+| `created_at`, `expires_at` | Both | The customer must decide before `expires_at` |
+| `approved_at`, `approval_expires_at` | Both | The teller must complete before `approval_expires_at` |
+| `rejected_at`, `cancelled_at`, `cancel_reason` | Teller | `cancel_reason`: `teller`, `shift_closed` |
+| `consumed_at` | Both | When the withdrawal was recorded |
+| `transaction_id` | Teller | The withdrawal transaction (unique) |
+| `server_time` | Both | Server clock, for countdowns |
+
+<Aside type="danger" title="No PIN in this object">
+The `withdrawal_authorizations` table has no PIN column, and no response contains the
+PIN.
+</Aside>

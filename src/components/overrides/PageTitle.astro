@@ -1,0 +1,166 @@
+---
+/*
+ * Page title with breadcrumbs (from the sidebar), an optional "coming soon"
+ * status, and the source files the page was written from.
+ */
+import Default from '@astrojs/starlight/components/PageTitle.astro';
+import type { StarlightRouteData } from '@astrojs/starlight/route-data';
+
+type SidebarEntry = StarlightRouteData['sidebar'][number];
+
+const route = Astro.locals.starlightRoute;
+const { entry, sidebar, lang } = route;
+const isEnglish = lang === 'en';
+
+const labels = isEnglish
+	? { home: 'Home', breadcrumbs: 'Breadcrumb', sources: 'Sources', comingSoon: 'Coming soon' }
+	: { home: 'Beranda', breadcrumbs: 'Navigasi remah roti', sources: 'Sumber', comingSoon: 'Segera hadir' };
+
+// Find the chain of sidebar groups that leads to the current page.
+function trail(entries: SidebarEntry[], parents: string[] = []): string[] | undefined {
+	for (const item of entries) {
+		if (item.type === 'link' && item.isCurrent) return parents;
+		if (item.type === 'group') {
+			const found = trail(item.entries, [...parents, item.label]);
+			if (found) return found;
+		}
+	}
+	return undefined;
+}
+
+const groups = trail(sidebar) ?? [];
+const homeHref = isEnglish ? '/en/' : '/';
+const { sources, status } = entry.data;
+const showChrome = entry.data.template !== 'splash';
+---
+
+{
+	showChrome && (
+		<nav class="breadcrumbs" aria-label={labels.breadcrumbs} data-pagefind-ignore>
+			<ol>
+				<li>
+					<a href={homeHref}>{labels.home}</a>
+				</li>
+				{groups.map((group) => (
+					<li>
+						<span>{group}</span>
+					</li>
+				))}
+				<li aria-current="page">
+					<span>{entry.data.title}</span>
+				</li>
+			</ol>
+		</nav>
+	)
+}
+
+<Default />
+
+{
+	showChrome && (status === 'coming-soon' || sources?.length) && (
+		<div class="page-meta" data-pagefind-ignore>
+			{status === 'coming-soon' && <span class="status-pill">{labels.comingSoon}</span>}
+			{sources?.length && (
+				<details class="sources">
+					<summary>
+						{labels.sources} ({sources.length})
+					</summary>
+					<ul>
+						{sources.map((source) => (
+							<li>
+								<code>{source}</code>
+							</li>
+						))}
+					</ul>
+				</details>
+			)}
+		</div>
+	)
+}
+
+<style>
+	.breadcrumbs ol {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem 0.4rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+		font-size: 0.8125rem;
+		color: var(--sl-color-gray-3);
+	}
+
+	.breadcrumbs li {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+	}
+
+	.breadcrumbs li + li::before {
+		content: '/';
+		color: var(--sl-color-gray-4);
+	}
+
+	.breadcrumbs a {
+		color: var(--sl-color-gray-3);
+		text-decoration: none;
+	}
+
+	.breadcrumbs a:hover {
+		color: var(--sl-color-accent);
+	}
+
+	.breadcrumbs [aria-current='page'] {
+		color: var(--sl-color-gray-2);
+	}
+
+	.page-meta {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem 0.75rem;
+		margin-top: 0.75rem;
+	}
+
+	.status-pill {
+		display: inline-block;
+		padding: 0.15rem 0.6rem;
+		border: 1px solid var(--sl-color-orange);
+		border-radius: 999px;
+		font-size: 0.75rem;
+		font-weight: 600;
+		color: var(--sl-color-orange-high);
+		background-color: var(--sl-color-orange-low);
+	}
+
+	.sources {
+		font-size: 0.8125rem;
+		color: var(--sl-color-gray-3);
+	}
+
+	.sources summary {
+		cursor: pointer;
+		font-weight: 600;
+		width: fit-content;
+	}
+
+	.sources summary:hover {
+		color: var(--sl-color-accent);
+	}
+
+	.sources ul {
+		margin: 0.4rem 0 0;
+		padding-inline-start: 1.1rem;
+	}
+
+	.sources li {
+		margin: 0.1rem 0;
+	}
+
+	.sources code {
+		font-size: 0.75rem;
+		color: var(--sl-color-gray-2);
+		background: none;
+		padding: 0;
+	}
+</style>

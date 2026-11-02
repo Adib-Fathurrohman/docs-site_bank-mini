@@ -1,0 +1,50 @@
+---
+title: Administrator
+description: Apa yang dapat dan tidak dapat dilakukan administrator, beserta endpoint yang dipakainya.
+sidebar:
+  order: 1
+sources:
+  - docs/RBAC.md
+  - routes/api.php
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+**Peran:** `admin` (tabel `users`). **Klien:** aplikasi web staf. **Fokus:** data induk
+(staf dan rekening), pengaturan, dan pemantauan jurnal.
+
+Akun administrator dibuat oleh seeder dan **tidak dapat** dibuat, diubah, diblokir,
+atau dihapus lewat API, termasuk password-nya.
+
+## Dapat
+
+| Kemampuan | Endpoint |
+| --- | --- |
+| Mengelola teller dan supervisor: buat, ubah, blokir, buka blokir, hapus (jika belum punya riwayat) | `POST /api/admin/staff`, `PUT\|PATCH`/`DELETE /api/admin/staff/{id}`, `…/block`, `…/unblock` |
+| Mengimpor staf dari spreadsheet `.xlsx`/`.csv` | `POST /api/admin/staff/import` |
+| Melihat daftar dan detail staf | `GET /api/staff`, `GET /api/staff/{id}` |
+| Membuka rekening, mengubah data, menangguhkan, me-reset PIN | `POST /api/admin/customers`, `PUT\|PATCH /api/admin/customers/{id}` |
+| Menutup rekening siswa yang lulus | `POST /api/admin/customers/{id}/deactivate` |
+| Mengambil data kartu nasabah (payload QR) | `GET /api/admin/customers/{id}/card` |
+| Melihat rekening, termasuk yang sudah ditutup | `GET /api/customers`, `GET /api/customers/{id}` |
+| Mengubah saldo minimum, mode pemindai QR, dan mode verifikasi penarikan | `PUT\|PATCH /api/admin/settings` |
+| Membaca log audit, jurnal, dan neraca saldo | `GET /api/audit/*` |
+| Mengunduh PDF jurnal, jejak audit, mutasi, dan laporan tahunan | `…/export`, `GET /api/customers/{id}/statement`, `GET /api/reports/annual` |
+
+## Tidak dapat
+
+- Mencatat atau mengoreksi transaksi, menjalankan shift, mencari nasabah di loket.
+- Melihat atau memeriksa laporan harian teller; melihat buku brankas.
+- Mengubah akun administrator mana pun, termasuk miliknya sendiri.
+- Mengelola jurusan (hanya baca).
+- Menyetujui penarikan atas nama nasabah atau melihat PIN.
+
+<Aside type="note" title="Catatan I1 · Admin dan log transaksi">
+Matriks RBAC di soal UKK tidak memberi admin akses ke "input transaksi" dan memberi
+akses baca ke jurnal. Backend juga mengizinkan admin **membaca** log transaksi
+(`/api/audit/transactions*`). Membaca bukan input, tetapi pembacaan matriks yang ketat
+bisa berbeda. Tercatat sebagai inkonsistensi I1.
+</Aside>
+
+Terkait: [Manajemen rekening dan staf](/workflows/account-management/) ·
+[API Admin](/api/admin/) · [Matriks lengkap](/concepts/roles-and-permissions/#matriks-kemampuan)

@@ -1,0 +1,45 @@
+---
+title: Teller
+description: Apa yang dapat dan tidak dapat dilakukan teller, beserta endpoint yang dipakainya.
+sidebar:
+  order: 3
+sources:
+  - docs/RBAC.md
+  - routes/api.php
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+**Peran:** `teller` (tabel `users`, biasanya siswa yang bertugas dengan kolom `class`
+dan `phone`). **Klien:** aplikasi web staf. **Fokus:** operasional loket.
+
+## Dapat
+
+| Kemampuan | Endpoint |
+| --- | --- |
+| Membuka, melihat, dan menutup shift sendiri | `GET /api/teller/shift`, `POST /api/teller/shift/open`, `/close` |
+| Mencari nasabah lewat QR, nomor rekening, atau NIS | `GET /api/teller/customers/lookup` |
+| Setor tunai | `POST /api/teller/deposits` |
+| Memulai, memantau, membatalkan, dan menyelesaikan penarikan yang disetujui nasabah di aplikasi | `/api/teller/withdrawal-authorizations…` |
+| Tarik tunai dengan PIN di loket (hanya jika mode `terminal`/`both`) | `POST /api/teller/withdrawals` |
+| Mengoreksi transaksi sendiri dengan kredensial supervisor | `POST /api/teller/transactions/{id}/correct` |
+| Melihat transaksi sendiri per hari, mencetak struk | `GET /api/teller/transactions`, `…/{id}/receipt` |
+| Melihat riwayat shift sendiri, mencetak laporan harian | `GET /api/teller/daily-reports`, `/{id}`, `/{id}/export` |
+| Membaca jurusan dan pengaturan | `GET /api/majors`, `GET /api/settings` |
+
+## Tidak dapat
+
+- Menelusuri daftar rekening (hanya mencari satu nasabah).
+- Melihat data teller lain (shift, transaksi, permintaan penarikan: `404`).
+- Memeriksa laporan, membaca log audit atau jurnal, mengubah pengaturan.
+- Mengelola staf atau rekening.
+- Mengubah atau menghapus transaksi (hanya koreksi).
+- Menyetujui penarikan atas nama nasabah atau melihat PIN nasabah di Mode A.
+
+<Aside type="caution" title="Satu permintaan penarikan terbuka">
+Seorang teller hanya dapat punya satu permintaan penarikan terbuka (`pending` atau
+`approved`) pada satu waktu.
+</Aside>
+
+Terkait: [Setor tunai](/workflows/deposit/) · [Tarik tunai](/workflows/withdrawal/) ·
+[Persetujuan PIN](/workflows/withdrawal-pin-authorization/) · [API Teller](/api/teller/)

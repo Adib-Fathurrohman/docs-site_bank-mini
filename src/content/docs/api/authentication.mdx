@@ -1,0 +1,108 @@
+---
+title: Autentikasi
+description: Endpoint login satu pintu untuk keempat aktor, profil pengguna saat ini, dan logout.
+sidebar:
+  order: 2
+sources:
+  - routes/api.php
+  - app/Http/Controllers/API/LoginController.php
+  - app/Http/Requests/Auth
+  - docs/API.md
+  - docs/AUTH.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Endpoint from '../../../components/Endpoint.astro';
+
+Alur dan aturan lengkap ada di [Login dan sesi](/workflows/authentication/).
+
+## Login
+
+<Endpoint method="POST" path="/api/login" limit="5/menit per username/identifier + IP" />
+
+Pintu masuk tunggal untuk keempat peran. Kirim **salah satu** set kredensial;
+`data.actor` memberi tahu klien portal mana yang dibuka.
+
+| Field | Aturan |
+| --- | --- |
+| `username`, `password` | Staf: wajib bersamaan. `username` maks. 255 |
+| `identifier`, `pin` | Nasabah: NIS atau nomor rekening (maks. 50) dan PIN tepat 6 digit |
+
+Jika `username` diisi, login staf yang berjalan; jika tidak dan `identifier` diisi,
+login nasabah yang berjalan; jika keduanya kosong, `422`.
+
+```http
+POST /api/login
+Accept: application/json
+Content-Type: application/json
+
+{ "username": "teller", "password": "password" }
+```
+
+```json title="200 (staf) — contoh dari basis data demo"
+{
+  "data": {
+    "actor": "staff",
+    "token": "<token>",
+    "token_type": "Bearer",
+    "user": {
+      "id": 3, "username": "teller", "full_name": "Teller Loket 1",
+      "class": "XI AK 1", "phone": "081200000001", "role": "teller", "is_active": true,
+      "created_at": "2026-10-27T13:10:33.000000Z", "updated_at": "2026-10-27T13:10:33.000000Z"
+    }
+  }
+}
+```
+
+**200 (nasabah):** `actor` bernilai `"customer"` dan `data.customer` berisi objek
+[Customer](/api/admin/#objek-customer).
+
+**422:** kredensial salah (`Username atau password salah.` /
+`NIS/nomor rekening atau PIN salah.`), staf diblokir, rekening ditutup, PIN diblokir,
+atau tidak ada kredensial:
+
+```json
+{
+  "message": "Isi username dan password (staf) atau NIS/nomor rekening dan PIN (nasabah).",
+  "errors": { "username": ["Isi username dan password (staf) atau NIS/nomor rekening dan PIN (nasabah)."] }
+}
+```
+
+PIN salah dihitung ke blokir PIN bersama, tetapi login tidak menampilkan sisa
+percobaan. Saat diblokir, pesannya
+`Terlalu banyak percobaan PIN salah. Coba lagi pukul 09:15.` (jam lokal).
+
+### Alias
+
+<Endpoint method="POST" path="/api/staff/login" limit="5/menit per username/identifier + IP" />
+
+<Endpoint method="POST" path="/api/customer/login" limit="5/menit per username/identifier + IP" />
+
+Alias yang hanya menerima body jenisnya sendiri. Gunakan `POST /api/login` saja
+(catatan I2).
+
+## Staf
+
+<Endpoint method="GET" path="/api/staff/me" roles="admin,supervisor,teller" />
+
+Staf yang sedang masuk: `{ "data": Staff }`. Panggil saat aplikasi dibuka untuk
+memvalidasi token yang tersimpan.
+
+<Endpoint method="POST" path="/api/staff/logout" roles="admin,supervisor,teller" />
+
+Mencabut token yang dipakai: `200 { "message": "Berhasil keluar." }`.
+
+## Nasabah
+
+<Endpoint method="GET" path="/api/customer/me" roles="customer" />
+
+Nasabah yang sedang masuk: `{ "data": Customer }` beserta jurusan.
+
+<Endpoint method="POST" path="/api/customer/logout" roles="customer" />
+
+Mencabut token yang dipakai: `200 { "message": "Berhasil keluar." }`.
+
+<Aside type="note" title="Token">
+Token berlaku 480 menit sejak dibuat (absolut). Respons login tidak memuat waktu
+kedaluwarsa dan tidak ada endpoint refresh. Token yang kedaluwarsa menghasilkan `401`.
+</Aside>

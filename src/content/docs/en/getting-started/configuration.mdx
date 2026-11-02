@@ -1,0 +1,82 @@
+---
+title: Configuration
+description: Backend environment variables, the settings an admin can change at runtime, and other environment requirements.
+sidebar:
+  order: 3
+sources:
+  - .env.example
+  - config/bank.php
+  - app/Services/SettingsService.php
+  - docs/BACKEND_CHECKPOINT.md
+  - docs/AUTH.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Backend configuration lives in two places:
+
+1. **Environment variables** (`.env`), read by the running application. Changing
+   them needs access to the server.
+2. **Settings** in the `settings` table, changed by an administrator through the API
+   without touching the server.
+
+## Bank-specific variables
+
+Defined in `config/bank.php` and listed in `.env.example`.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `BANK_NAME` | `Bank Mini Sekolah` | Bank name printed on receipts and PDF reports |
+| `BANK_SCHOOL` | `SMK` | School name printed on PDFs |
+| `BANK_MIN_BALANCE` | `10000` | Initial value of the `min_balance` setting (Rupiah) |
+| `BANK_PIN_MAX_ATTEMPTS` | `3` | Wrong PINs in a row before the PIN is locked |
+| `BANK_PIN_LOCK_MINUTES` | `15` | How long the PIN stays locked (minutes) |
+| `BANK_WITHDRAWAL_AUTH_PENDING_SECONDS` | `120` | Time the customer has to approve a withdrawal request |
+| `BANK_WITHDRAWAL_AUTH_APPROVED_SECONDS` | `120` | Time the teller has to complete an approved withdrawal |
+| `SANCTUM_EXPIRATION` | `480` | API token lifetime (minutes). Absolute; activity does not extend it |
+
+The cash denominations a teller counts are also in `config/bank.php`, but cannot be
+set through `.env`: `100000`, `50000`, `20000`, `10000`, `5000`, `2000`, `1000`,
+`500`, `200`, `100`.
+
+## Important Laravel variables
+
+| Variable | Value used | Notes |
+| --- | --- | --- |
+| `APP_TIMEZONE` | `Asia/Jakarta` | Decides "today" for shifts and the `YYYY-MM-DD` date format |
+| `APP_DEBUG` | `true` locally | When `true`, `500` responses contain a stack trace. Set `false` outside development |
+| `DB_CONNECTION` | `mariadb` | See [Installation](/en/getting-started/installation/) |
+| `CACHE_STORE` | `database` | The login rate limiter uses this cache (`cache` table) |
+| `BCRYPT_ROUNDS` | `12` | Hash cost for staff passwords and customer PINs |
+| `QUEUE_CONNECTION`, `SESSION_DRIVER` | `database` | Not used by the API; the defaults are harmless |
+
+## Settings changed by the admin
+
+Stored in the `settings` table (`key`, `value`, `updated_by`). Every staff member can
+read them with `GET /api/settings`; only the admin can change them with
+`PUT|PATCH /api/admin/settings`. See [Admin API](/en/api/admin/#settings).
+
+| Key | Values | Default | Purpose |
+| --- | --- | --- | --- |
+| `min_balance` | Integer 0 – 1,000,000 | `10000` | Balance that must remain after a withdrawal |
+| `qr_scanner_mode` | `webcam`, `usb`, `disabled` | `webcam` | How the teller screen reads QR cards. Stored and returned only; the backend does not restrict lookups by this value |
+| `withdrawal_verification` | `mobile`, `terminal`, `both` | `mobile` | How the customer authorizes a withdrawal. See [PIN verification](/en/concepts/pin-verification/) |
+
+```json title="GET /api/settings — example response"
+{ "data": { "min_balance": 10000, "qr_scanner_mode": "webcam", "withdrawal_verification": "mobile" } }
+```
+
+## Other environment requirements
+
+| Item | Requirement |
+| --- | --- |
+| API base URL | `{APP_URL}/api`. Clients should read it from an environment variable, for example `VITE_API_BASE_URL` (web) and `EXPO_PUBLIC_API_BASE_URL` (Expo) |
+| CORS | Framework default (no `config/cors.php`): paths `api/*`, all origins, methods and headers; no credentials; no exposed response headers |
+| Storage | The application stores no files. `storage/` must be writable (logs, cache, DomPDF font cache in `storage/fonts`), and so must the PHP temp directory (spreadsheet uploads) |
+| HTTPS | A deployment matter; not configured in the repository |
+
+<Aside type="caution" title="Not decided yet">
+The production URL, production database credentials and production CORS origin
+restrictions are not defined in the repository. The deployment environment must set
+all three.
+</Aside>

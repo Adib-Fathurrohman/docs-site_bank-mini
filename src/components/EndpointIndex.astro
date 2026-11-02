@@ -1,0 +1,196 @@
+---
+/*
+ * Table of every API route, generated from src/data/api-summary.json (a copy
+ * of the backend's docs/API_SUMMARY.json, which is built from
+ * `php artisan route:list`). Each path links to the page that documents it.
+ */
+import summary from '../data/api-summary.json';
+
+interface Endpoint {
+	method: string | string[];
+	path: string;
+	actor: string;
+	roles: string[];
+	rate_limit?: string[];
+}
+
+const isEnglish = Astro.locals.starlightRoute.lang === 'en';
+const base = isEnglish ? '/en/api/' : '/api/';
+
+const t = isEnglish
+	? { method: 'Method', path: 'Path', access: 'Access', limit: 'Rate limit', page: 'Documented in', public: 'public' }
+	: { method: 'Metode', path: 'Path', access: 'Akses', limit: 'Batas permintaan', page: 'Dokumentasi', public: 'publik' };
+
+const pages: Record<string, { slug: string; id: string; en: string }> = {
+	authentication: { slug: 'authentication', id: 'Autentikasi', en: 'Authentication' },
+	admin: { slug: 'admin', id: 'Admin', en: 'Admin' },
+	teller: { slug: 'teller', id: 'Teller', en: 'Teller' },
+	authorizations: { slug: 'withdrawal-authorizations', id: 'Otorisasi penarikan', en: 'Withdrawal authorizations' },
+	supervisor: { slug: 'supervisor', id: 'Supervisor', en: 'Supervisor' },
+	audit: { slug: 'audit-and-reports', id: 'Audit & laporan', en: 'Audit & reports' },
+	customer: { slug: 'customer', id: 'Nasabah', en: 'Customer' },
+};
+
+// The page that documents a route, by path.
+function pageFor(path: string) {
+	const p = path.replace(/^\/api/, '');
+	if (/^\/(login|staff\/login|customer\/login|staff\/me|staff\/logout|customer\/me|customer\/logout)$/.test(p)) return pages.authentication;
+	if (p.includes('withdrawal-authorizations')) return pages.authorizations;
+	if (p.startsWith('/teller')) return pages.teller;
+	if (p.startsWith('/supervisor')) return pages.supervisor;
+	if (p.startsWith('/audit') || p.startsWith('/reports') || p.endsWith('/statement')) return pages.audit;
+	if (p.startsWith('/customer/')) return pages.customer;
+	return pages.admin;
+}
+
+// Indonesian wording for the rate limits in the summary (falls back to the original).
+const limitsId: Record<string, string> = {
+	'5 per minute per username/identifier + IP': '5 per menit per username/identifier + IP',
+	'10 per minute per teller': '10 per menit per teller',
+	'10 per 1 minute(s) per user': '10 per menit per teller',
+	'120 per minute per actor (teller or customer)': '120 per menit per aktor (teller atau nasabah)',
+	'5 per minute per customer': '5 per menit per nasabah',
+};
+const limitText = (limit: string) => (isEnglish ? limit : (limitsId[limit] ?? limit));
+
+const rows = (summary.endpoints as Endpoint[]).map((endpoint) => ({
+	...endpoint,
+	methods: Array.isArray(endpoint.method) ? endpoint.method : [endpoint.method],
+	page: pageFor(endpoint.path),
+}));
+---
+
+<div class="endpoint-index not-content">
+	<table>
+		<thead>
+			<tr>
+				<th scope="col">{t.method}</th>
+				<th scope="col">{t.path}</th>
+				<th scope="col">{t.access}</th>
+				<th scope="col">{t.limit}</th>
+			</tr>
+		</thead>
+		<tbody>
+			{
+				rows.map((row) => (
+					<tr>
+						<td class="methods">
+							{row.methods.map((m) => (
+								<span class={`method method-${m.toLowerCase()}`}>{m}</span>
+							))}
+						</td>
+						<td>
+							<a href={`${base}${row.page.slug}/`} title={`${t.page}: ${isEnglish ? row.page.en : row.page.id}`}>
+								<code>
+									{row.path
+										.split('/')
+										.slice(1)
+										.map((segment) => (
+											<>
+												/<wbr />
+												{segment}
+											</>
+										))}
+								</code>
+							</a>
+						</td>
+						<td class="roles">{row.roles.length ? row.roles.join(', ') : t.public}</td>
+						<td class="limit">{row.rate_limit?.map(limitText).join('; ') ?? '—'}</td>
+					</tr>
+				))
+			}
+		</tbody>
+	</table>
+</div>
+
+<style>
+	.endpoint-index {
+		margin-block: 1.5rem;
+		overflow-x: auto;
+		border: 1px solid var(--bm-border);
+		border-radius: 0.5rem;
+	}
+
+	table {
+		width: 100%;
+		border-collapse: collapse;
+		font-size: 0.8125rem;
+	}
+
+	th,
+	td {
+		padding: 0.45rem 0.7rem;
+		border-bottom: 1px solid var(--bm-border);
+		text-align: start;
+		vertical-align: top;
+	}
+
+	th {
+		position: sticky;
+		top: 0;
+		background-color: var(--bm-surface);
+		font-weight: 600;
+		color: var(--sl-color-white);
+		white-space: nowrap;
+	}
+
+	tr:last-child td {
+		border-bottom: 0;
+	}
+
+	td {
+		color: var(--sl-color-gray-2);
+	}
+
+	code {
+		font-family: var(--sl-font-mono);
+		font-size: 0.78rem;
+		color: var(--sl-color-white);
+	}
+
+	.methods {
+		white-space: nowrap;
+	}
+
+	.method {
+		display: inline-block;
+		margin-inline-end: 0.2rem;
+		padding: 0.05rem 0.35rem;
+		border-radius: 0.25rem;
+		font-family: var(--sl-font-mono);
+		font-size: 0.68rem;
+		font-weight: 700;
+		color: var(--sl-color-black);
+	}
+
+	.method-get {
+		background-color: var(--bm-method-get);
+	}
+
+	.method-post {
+		background-color: var(--bm-method-post);
+	}
+
+	.method-put,
+	.method-patch {
+		background-color: var(--bm-method-put);
+	}
+
+	.method-delete {
+		background-color: var(--bm-method-delete);
+	}
+
+	.roles,
+	.limit {
+		font-size: 0.78rem;
+	}
+
+	a {
+		text-decoration: none;
+	}
+
+	a:hover code {
+		color: var(--sl-color-accent);
+		text-decoration: underline;
+	}
+</style>

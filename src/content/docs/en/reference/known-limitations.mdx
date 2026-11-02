@@ -1,0 +1,88 @@
+---
+title: Known limitations
+description: Backend behavior that has not been fixed, recorded inconsistencies, features that are not available, and differences in the source documentation.
+sidebar:
+  order: 5
+sources:
+  - docs/BACKEND_CHECKPOINT.md
+  - docs/FRONTEND_HANDOFF.md
+  - docs/WORKFLOWS.md
+  - PRD.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Backend limitations
+
+Current behavior that has not been fixed. Numbering follows
+`docs/BACKEND_CHECKPOINT.md`; *verified* means confirmed by running the code.
+
+| # | Limitation | Impact on clients |
+| --- | --- | --- |
+| L1 | Amounts need not be multiples of 100, but cash is counted in denominations of Rp100 or more. An amount like Rp150 makes the shift impossible to close until corrected (*verified*) | Enforce multiples of Rp100 in the teller client |
+| L2 | Mode B (`POST /teller/withdrawals`) checks the PIN before the shift, status and balance | In `terminal` mode, check `can_transact`, status, balance and `pin_locked_until` first |
+| L3 | A rejected shift still shows the old `physical_balance`, `difference` and `closing_counts` until it is closed again (*verified*) | For `status = rejected`, ignore them or label them "previous count" |
+| L4 | CORS exposes no response headers (`Idempotent-Replayed`, `Content-Disposition`) | Detect replays by `201`/`200`; name PDFs in the client; or use a same-origin proxy |
+| L5 | Closing an account needs no zero balance and cannot be undone | Warn before closing an account with money in it |
+| L6 | Staff cannot change their own password; admin accounts cannot be edited through the API | No "change password" page for staff |
+| L7 | No token refresh (8 hours, absolute) | Log in again on `401` |
+| L8 | No forgot password/PIN | Show "contact the administrator" |
+| L9 | Mixed languages: Indonesian business messages, English validation messages | Map field messages if one language is needed |
+| L10 | The annual report, journal and audit exports are PDF-only | Build tables from the `/audit/*` JSON |
+| L11 | Filter values on `/customers` and `/staff` are not validated | Use dropdowns with fixed values |
+| L12 | `qr_scanner_mode` is only stored; lookups accept QR payloads even in `disabled` mode | The client decides what to offer |
+| L13 | Majors cannot be managed through the API | Read-only dropdown |
+| L14 | Tellers can only look up one customer; there is no account list for tellers | No account browsing for tellers |
+| L15 | `customers.balance` is a 32-bit integer (max Rp2.147.483.647) | Not relevant at school scale |
+| L16 | Idempotency keys never expire | Generate a new key per transaction |
+| L17 | The QR payload is not signed; it only identifies | Withdrawals always need the PIN |
+| L18 | No list has sort parameters | Accept the server order |
+| L19 | Withdrawal requests are delivered by polling only | Poll while visible |
+| L20 | Customer tokens have no abilities | Optional: biometrics before the PIN pad |
+| L21 | An account closed between approval and completion makes `complete` answer `404` | Show the message; start over |
+
+## Recorded inconsistencies
+
+From `docs/FRONTEND_HANDOFF.md` §19.
+
+| # | Item | Status |
+| --- | --- | --- |
+| I1 | The UKK matrix gives the admin no "input transaksi" access and read access to the journal. The backend also lets admins read the transaction log | Implemented as described |
+| I2 | `POST /staff/login` and `/customer/login` duplicate `POST /login` | Use `/login` only |
+| I3 | The login message `Rekening ini sudah tidak aktif.` can practically never appear (`inactive` accounts are always soft-deleted) | Treat both as a login failure |
+| I6 | The UKK interview asked about Customer Service/Accounting roles and student vs employee savings products; the backend implements the exam's four roles and one savings product (account 201) | Not available |
+
+## Not available
+
+These features do **not** exist in the backend. Do not build UI for them.
+
+- Customer self-registration; customer-initiated transactions; transfers between accounts.
+- Loans, term deposits, savings products other than account 201, fees.
+- Restoring closed accounts; closing with an automatic pay-out.
+- Partial corrections; editing or deleting transactions.
+- Bulk report approval; delegated approval.
+- Moving cash from the vault to tellers.
+- Forgot password/PIN; staff changing their own password; managing admin accounts.
+- Major management; multi-role users; attendance integration.
+- Notifications (push, email, WhatsApp).
+- Approval in the app for deposits or corrections (withdrawals only).
+- A JSON annual report; server-generated QR images.
+- A withdrawal authorization list for admins or supervisors.
+
+## Differences in the source documentation
+
+Found while building this site. The source documents were **not changed**; the
+differences are recorded here so they can be fixed.
+
+| Document | Statement | Actual state |
+| --- | --- | --- |
+| `PRD.md` | The customer platform is **Mobile Web** (responsive React) | The backend documentation and project plan target a **React Native + Expo** app. This site follows the backend documentation |
+| `docs/BACKEND_CHECKPOINT.md` | The mobile approval work is "**not committed yet**" | Committed in `2cc6b58` |
+| `docs/README.md` | The test suite has **448** tests | `docs/BACKEND_CHECKPOINT.md` reports **540** passing tests after the mobile approval feature |
+| `docs/FRONTEND_HANDOFF.md` §10 | The `429` row only mentions login and corrections | The withdrawal authorization endpoints are rate limited too (see [API overview](/en/api/#rate-limits)) |
+| `.env.example` vs `README.md` | `.env.example` uses `DB_CONNECTION=sqlite`; the README instructs MariaDB | Also recorded in `docs/BACKEND_CHECKPOINT.md`; this site follows the README |
+
+<Aside type="note" title="Client apps">
+The limitations on this page belong to the backend. The status of the web and mobile
+apps is in [Client apps](/en/clients/).
+</Aside>

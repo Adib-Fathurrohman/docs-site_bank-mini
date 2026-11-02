@@ -1,0 +1,33 @@
+{
+  "name": "bank-mini-docs",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check:links": "node scripts/check-links.mjs",
+    "check:api": "node scripts/check-api.mjs",
+    "sync:api": "node scripts/sync-api-summary.mjs",
+    "changes": "node scripts/changes.mjs",
+    "validate": "npm run build && npm run check:links && npm run check:api",
+    "pdf": "astro build && node scripts/build-pdf.mjs",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/markdown-satteri": "^0.4.6",
+    "@astrojs/starlight": "^0.42.8",
+    "@fontsource-variable/inter": "^5.3.0",
+    "astro": "^7.4.4",
+    "mermaid": "^12.2.0",
+    "sharp": "^0.35.5"
+  },
+  "engines": {
+    "node": ">=22.23.4"
+  },
+  "devDependencies": {
+    "pdfjs-dist": "^6.5.438",
+    "playwright-core": "^1.64.1"
+  }
+}

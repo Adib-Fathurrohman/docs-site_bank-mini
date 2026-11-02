@@ -1,0 +1,88 @@
+---
+title: Pengenalan
+description: Apa itu E-Teller Bank Mini Sekolah, apa saja komponennya, dan sejauh mana setiap komponen sudah dibangun.
+sidebar:
+  order: 1
+sources:
+  - PRD.md
+  - README.md
+  - docs/BACKEND_CHECKPOINT.md
+  - docs/FRONTEND_HANDOFF.md
+---
+
+import { Aside, Badge } from '@astrojs/starlight/components';
+
+**E-Teller Bank Mini Sekolah** adalah sistem perbankan internal untuk sekolah,
+dibuat sebagai proyek Uji Kompetensi Keahlian (UKK) RPL. Sistem ini mengelola
+tabungan siswa: setor tunai dan tarik tunai di loket, pencatatan jurnal akuntansi
+entri ganda, shift teller dengan penutupan kas, dan pemeriksaan laporan harian oleh
+supervisor.
+
+## Cara kerja dalam satu paragraf
+
+Semua uang bergerak lewat **teller di loket**. Teller membuka shift dengan menghitung
+uang di laci, mencatat setoran dan penarikan nasabah, lalu menutup shift dengan
+menghitung ulang uang fisik yang harus sama dengan saldo sistem. **Supervisor**
+memeriksa laporan harian itu; jika disetujui, kas otomatis tercatat pindah dari laci
+teller ke brankas utama. **Administrator** mengelola akun staf, rekening nasabah, dan
+pengaturan. **Nasabah** (siswa) melihat saldo dan mutasinya, serta menyetujui atau
+menolak penarikan yang dimulai teller dengan PIN di aplikasinya.
+
+<Aside type="note" title="Bukan bank sungguhan">
+Sistem ini tidak terhubung ke payment gateway, bank luar, atau layanan pihak ketiga.
+Tidak ada transfer antar-rekening, pinjaman, atau transaksi yang dimulai nasabah.
+</Aside>
+
+## Komponen sistem
+
+| Komponen | Teknologi | Pengguna | Status |
+| --- | --- | --- | --- |
+| Backend REST API | Laravel 13, PHP 8.3+, MariaDB, Sanctum | Semua klien | <Badge text="Selesai" variant="success" /> |
+| Aplikasi web staf | React | Admin, Supervisor, Teller | <Badge text="Dalam pengembangan" variant="caution" /> |
+| Aplikasi mobile nasabah | React Native + Expo | Nasabah (siswa) | <Badge text="Belum dimulai" variant="note" /> |
+
+Backend sudah menyediakan semua endpoint yang dibutuhkan kedua klien dan telah diuji
+otomatis (540 test lulus di SQLite dan MariaDB menurut `docs/BACKEND_CHECKPOINT.md`).
+Dokumentasi klien ditunda sampai aplikasinya selesai; lihat
+[Aplikasi klien](/clients/).
+
+## Empat aktor
+
+| Aktor | Masuk dengan | Peran singkat |
+| --- | --- | --- |
+| Administrator | Username + password | Mengelola staf, rekening nasabah, dan pengaturan; membaca jurnal dan laporan |
+| Supervisor | Username + password | Memeriksa laporan harian teller, mengotorisasi koreksi, memantau brankas dan jurnal |
+| Teller | Username + password | Menjalankan shift, mencatat setoran dan penarikan, mengoreksi kesalahan |
+| Nasabah | NIS atau nomor rekening + PIN 6 digit | Melihat rekening sendiri; menyetujui atau menolak penarikan dengan PIN |
+
+Rinciannya ada di [Peran & hak akses](/concepts/roles-and-permissions/).
+
+## Prinsip utama
+
+- **Backend adalah sumber kebenaran.** Setiap permintaan diperiksa ulang di server
+  (token, peran, kepemilikan data, aturan bisnis). Menyembunyikan tombol di frontend
+  bukan pengamanan.
+- **Transaksi tidak pernah diubah atau dihapus.** Kesalahan dibatalkan dengan
+  transaksi koreksi.
+- **Setiap perubahan saldo atomik.** Saldo, transaksi, dan dua baris jurnal ditulis
+  dalam satu transaksi database dengan row lock.
+- **Penarikan selalu butuh PIN nasabah.** Secara bawaan nasabah menyetujuinya di
+  aplikasinya sendiri, sehingga teller tidak pernah melihat PIN.
+
+## Tentang dokumentasi ini
+
+Isi situs ini ditulis dari kode backend (route, middleware, controller, form request,
+service, resource, migration, dan test) serta dokumen di folder `docs/` repositori
+backend, pada commit `4610046` di branch `main`. Di bagian atas setiap halaman ada
+daftar **Sumber** yang dipakai.
+
+- Contoh respons JSON diambil dari permintaan sungguhan ke basis data **demo**
+  (data seeder). Nama dan nominalnya fiktif.
+- Contoh yang hanya ilustrasi diberi label demikian.
+- Fitur yang belum dibangun ditandai jelas sebagai *belum tersedia*.
+
+<Aside type="caution" title="Jika dokumentasi berbeda dengan kode">
+Kode backend yang menentukan. Laporkan perbedaannya agar dokumen ini diperbaiki.
+Perbedaan yang sudah diketahui tercantum di
+[Keterbatasan yang diketahui](/reference/known-limitations/).
+</Aside>

@@ -1,0 +1,101 @@
+---
+title: Ikhtisar API
+description: Konvensi REST API Bank Mini, header, format uang dan waktu, paginasi, enum, batas permintaan, dan daftar lengkap 67 endpoint.
+sidebar:
+  order: 1
+  label: Ikhtisar
+sources:
+  - routes/api.php
+  - docs/API.md
+  - docs/API_SUMMARY.json
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import EndpointIndex from '../../../components/EndpointIndex.astro';
+
+Backend menyediakan **67 route** JSON di bawah `/api` (66 path unik; `PUT|PATCH`
+berbagi satu route). Daftar di bagian bawah halaman ini dibuat otomatis dari
+`docs/API_SUMMARY.json`, yang dihasilkan dari `php artisan route:list`.
+
+## Konvensi
+
+| Hal | Aturan |
+| --- | --- |
+| Base URL | `http://localhost:8000/api` saat pengembangan (host aplikasi + `/api`) |
+| Header | Selalu `Accept: application/json`; `Content-Type: application/json` jika ada body; `Authorization: Bearer <token>` di semua endpoint kecuali login |
+| Uang | Bilangan bulat Rupiah tanpa desimal (`50000` = Rp50.000) |
+| Timestamp | ISO 8601 dalam UTC, misalnya `2026-10-27T13:10:36.000000Z` (= 20:10 WIB). Ubah ke waktu lokal di klien |
+| Tanggal | `YYYY-MM-DD` dalam zona waktu sekolah (Asia/Jakarta). Filter audit juga menerima `YYYY-MM-DD HH:MM` |
+| Objek tunggal | Dibungkus `data` |
+| Daftar | Array `data` ditambah `links` dan `meta` |
+| PDF | `Content-Type: application/pdf` dan `Content-Disposition: attachment; filename=...` |
+| Bahasa pesan | Pesan aturan bisnis berbahasa Indonesia; pesan validasi field memakai bahasa Inggris bawaan Laravel |
+| Data rahasia | Password, PIN, dan idempotency key tidak pernah muncul di respons |
+
+<Aside type="note" title="Tentang contoh di referensi ini">
+Contoh respons diambil dari permintaan sungguhan ke basis data **demo** (seeder);
+nama dan nominalnya fiktif. Daftar yang panjang dipendekkan, dan `"...": "..."`
+menandai field yang dihilangkan. Token ditulis `<token>`.
+</Aside>
+
+## Paginasi
+
+Daftar menerima `?page=` (bawaan 1) dan `?per_page=` (1–100, dibatasi otomatis; bawaan
+berbeda per endpoint).
+
+```json
+{
+  "data": [ "..." ],
+  "links": { "first": "...?page=1", "last": "...?page=2", "prev": null, "next": "...?page=2" },
+  "meta": { "current_page": 1, "from": 1, "last_page": 2, "path": "...", "per_page": 15, "to": 15, "total": 22 }
+}
+```
+
+Tidak ada parameter urutan; setiap endpoint punya urutan tetap.
+
+## Enum
+
+| Field | Nilai |
+| --- | --- |
+| `role` staf | `admin`, `supervisor`, `teller` |
+| `account_status` nasabah | `active` (dapat bertransaksi), `suspended` (dapat login dan melihat, tidak dapat bertransaksi), `inactive` (lulus: tidak dapat login, soft delete) |
+| `class` / `group` nasabah | `X`, `XI`, `XII` / `1`–`4` |
+| `type` transaksi | `deposit`, `withdrawal`, `deposit_correction`, `withdrawal_correction` |
+| `account_code` jurnal | `101` (Kas), `201` (Tabungan Nasabah) |
+| `position` jurnal | `debit`, `credit` |
+| `status` laporan harian | `open`, `submitted`, `on_hold`, `approved`, `rejected` |
+| `qr_scanner_mode` | `webcam`, `usb`, `disabled` |
+| `withdrawal_verification` | `mobile`, `terminal`, `both` |
+| `status` otorisasi penarikan | `pending`, `approved`, `consumed`, `rejected`, `cancelled`, `expired` |
+| Pecahan uang | `100000`, `50000`, `20000`, `10000`, `5000`, `2000`, `1000`, `500`, `200`, `100` |
+
+## Batas permintaan
+
+| Limiter | Route | Batas | Kunci |
+| --- | --- | --- | --- |
+| `login` | `POST /login`, `/staff/login`, `/customer/login` | 5 per menit | username/identifier (huruf kecil) + IP |
+| `throttle:10,1` | `POST /teller/transactions/{id}/correct` | 10 per menit | teller |
+| `withdrawal-authorization-create` | `POST /teller/withdrawal-authorizations` | 10 per menit | teller |
+| `withdrawal-authorization-poll` | daftar/detail/batal/selesai (teller), daftar/detail (nasabah) | 120 per menit | aktor |
+| `withdrawal-authorization-decide` | setuju/tolak (nasabah) | 5 per menit | nasabah |
+
+Melebihi batas menghasilkan `429 {"message":"Too Many Attempts."}`. Kunci limiter
+otorisasi memuat jenis aktor, sehingga teller dan nasabah dengan id angka yang sama
+tidak berbagi penghitung.
+
+## Halaman referensi
+
+| Halaman | Isi |
+| --- | --- |
+| [Autentikasi](/api/authentication/) | Login satu pintu, profil sendiri, logout |
+| [Admin](/api/admin/) | Data referensi, pengaturan, manajemen staf, rekening nasabah |
+| [Teller](/api/teller/) | Shift, pencarian nasabah, setor, tarik (PIN di loket), transaksi, koreksi, riwayat shift |
+| [Otorisasi penarikan](/api/withdrawal-authorizations/) | Persetujuan penarikan di aplikasi (sisi teller dan nasabah) |
+| [Supervisor](/api/supervisor/) | Pemeriksaan laporan harian, buku brankas |
+| [Audit & laporan](/api/audit-and-reports/) | Log transaksi, jurnal, neraca saldo, PDF |
+| [Nasabah](/api/customer/) | Saldo, mutasi, kartu, ganti PIN |
+| [Error](/api/errors/) | Format error, kode status, field tambahan |
+
+## Semua endpoint
+
+<EndpointIndex />

@@ -1,0 +1,86 @@
+---
+title: Error
+description: Format respons error, arti setiap kode status, field tambahan pada error bisnis, dan cara klien menanganinya.
+sidebar:
+  order: 9
+sources:
+  - bootstrap/app.php
+  - app/Exceptions
+  - docs/API.md
+  - docs/FRONTEND_HANDOFF.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Setiap error punya `message`. Error validasi juga punya `errors` yang dikelompokkan per
+field. Beberapa error bisnis menambahkan field lain.
+
+## Kode status
+
+| Status | Kapan | Contoh body | Tindakan klien |
+| --- | --- | --- | --- |
+| `401` | Token tidak ada, salah, atau kedaluwarsa | `{ "message": "Unauthenticated." }` | Hapus token, ke halaman login |
+| `403` | Aktor atau peran salah, akun diblokir atau rekening ditutup | `{ "message": "Peran Anda tidak memiliki akses ke fitur ini." }` | Logout dan kembali ke login (rubrik UKK 3.2), kecuali kasus akun admin di bawah |
+| `404` | Data tidak ada atau milik orang lain | `{ "message": "Data tidak ditemukan." }` | Tampilkan "tidak ditemukan" |
+| `405` | Metode tidak diizinkan (misalnya menulis ke jurnal) | `{ "message": "The DELETE method is not supported for route ..." }` | Kesalahan pemrograman |
+| `409` | Penghapusan staf ditolak karena punya riwayat | `{ "message": "Staf ini memiliki riwayat transaksi, ... Blokir akunnya saja." }` | Tawarkan "Blokir" |
+| `422` + `errors` | Validasi field gagal | `{ "message": "...", "errors": { "amount": ["The amount field must be at least 1."] } }` | Tampilkan pesan di samping field |
+| `422` tanpa `errors` | Aturan bisnis menolak | `{ "message": "Saldo tidak mencukupi. ..." }` | Tampilkan pesan dengan jelas; tidak ada yang tersimpan |
+| `429` | Terlalu banyak permintaan login, koreksi, atau otorisasi penarikan | `{ "message": "Too Many Attempts." }` | "Terlalu banyak percobaan, tunggu sebentar" |
+| `500` | Error server tak terduga; operasi uang dibatalkan seluruhnya | `{ "message": "Server Error" }` | Pesan umum. Jangan tampilkan stack trace mentah |
+
+<Aside type="note" title="403 yang bukan alasan logout">
+`Akun administrator tidak dapat diubah melalui API.` saat mengubah, memblokir, atau
+menghapus staf adalah error bisnis biasa. Tampilkan pesannya tanpa logout.
+</Aside>
+
+## Pesan 403
+
+| Pesan | Arti |
+| --- | --- |
+| `Fitur ini khusus untuk staf bank.` | Token nasabah di URL staf |
+| `Fitur ini khusus untuk nasabah.` | Token staf di URL nasabah |
+| `Peran Anda tidak memiliki akses ke fitur ini.` | Peran staf salah |
+| `Akun staf ini sudah dinonaktifkan.` | Staf diblokir |
+| `Rekening ini sudah tidak aktif.` | Rekening nasabah ditutup |
+
+Pemeriksaan peran berjalan sebelum data dicari, sehingga peran yang salah selalu
+mendapat `403`, tidak pernah `404`.
+
+## Error bisnis dengan field tambahan
+
+| Kasus | Field tambahan |
+| --- | --- |
+| Uang fisik tidak cocok saat menutup shift | `system_balance`, `physical_balance`, `difference` |
+| PIN salah atau diblokir (persetujuan, penarikan di loket, ganti PIN) | `remaining_attempts`, `pin_locked_until` (UTC ISO atau null) |
+| Permintaan penarikan tidak dapat diproses dalam status saat ini | `status` (misalnya `expired`, `cancelled`, `consumed`) |
+
+```json title="Contoh: PIN salah"
+{ "message": "PIN salah. Sisa percobaan: 2.", "remaining_attempts": 2, "pin_locked_until": null }
+```
+
+## Bagaimana backend menghasilkan error
+
+| Sumber | Status | Keterangan |
+| --- | --- | --- |
+| Middleware `auth:sanctum` | `401` | Route API tidak pernah me-redirect; tamu selalu mendapat JSON |
+| Middleware `staff` / `customer` | `403` | Lihat [Peran dan hak akses](/concepts/roles-and-permissions/#middleware) |
+| Route model binding tidak menemukan data | `404` | `bootstrap/app.php` mengubah `ModelNotFoundException` di `api/*` menjadi `Data tidak ditemukan.` |
+| Form request | `422` + `errors` | Pesan validasi bawaan Laravel (bahasa Inggris) |
+| `App\Exceptions\BankingException` dan turunannya | `422` | Aturan bisnis; pesan berbahasa Indonesia. Lihat [Penanganan error](/reference/error-handling/) |
+| Rate limiter | `429` | |
+
+Semua error di bawah `api/*` dirender sebagai JSON (`shouldRenderJsonWhen`), bahkan
+tanpa header `Accept`, tetapi tetap kirim `Accept: application/json`.
+
+## Bahasa pesan
+
+Pesan bisnis berbahasa Indonesia; pesan validasi field memakai bahasa Inggris bawaan
+Laravel (`"The amount field must be at least 1."`). Klien dapat memetakan pesan field ke
+teks sendiri jika butuh satu bahasa (keterbatasan L9).
+
+## Mengunduh PDF
+
+Endpoint PDF mengembalikan `application/pdf` jika berhasil dan JSON jika gagal (misalnya
+laporan harian yang masih terkunci). Minta sebagai blob, periksa `Content-Type`, lalu
+tampilkan `message` jika JSON.

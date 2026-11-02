@@ -1,0 +1,162 @@
+---
+title: Arsitektur sistem
+description: Komponen sistem, komunikasi klien-server, lapisan backend Laravel, dan perjalanan satu permintaan dari klien sampai database.
+sidebar:
+  order: 1
+sources:
+  - routes/api.php
+  - bootstrap/app.php
+  - app/Http
+  - app/Services
+  - docs/FRONTEND_HANDOFF.md
+  - docs/AUTH.md
+---
+
+import { Aside, FileTree } from '@astrojs/starlight/components';
+import Mermaid from '../../../components/Mermaid.astro';
+
+## Gambaran besar
+
+Sistem terdiri dari satu backend dan dua klien. Backend tidak punya tampilan web
+sendiri (selain halaman sambutan bawaan Laravel di `/` dan health check `/up`); semua
+fungsi tersedia sebagai **REST API JSON** di bawah `/api`.
+
+<Mermaid
+	caption="Komponen sistem. Garis putus-putus: klien yang belum selesai."
+	chart={`flowchart TB
+  subgraph clients["Klien"]
+    direction LR
+    web["Aplikasi web staf<br/>React<br/>Admin · Supervisor · Teller"]
+    mobile["Aplikasi mobile nasabah<br/>React Native + Expo<br/>Siswa"]
+  end
+  subgraph server["Backend Laravel 13"]
+    direction TB
+    routes["routes/api.php<br/>67 route"]
+    mw["Middleware<br/>auth:sanctum · staff · customer · throttle"]
+    ctrl["Controller + Form Request"]
+    svc["Service<br/>aturan bisnis · transaksi DB"]
+    res["API Resource<br/>bentuk respons JSON"]
+    pdf["DomPDF<br/>struk & laporan"]
+    sched["Scheduler<br/>prune token · expire otorisasi"]
+  end
+  db[("MariaDB · InnoDB<br/>FK RESTRICT · CHECK")]
+  web -. "Bearer token" .-> routes
+  mobile -. "Bearer token" .-> routes
+  routes --> mw --> ctrl --> svc --> db
+  ctrl --> res
+  svc --> pdf
+  sched --> db`}
+/>
+
+## Komunikasi klien-server
+
+| Aspek | Perilaku |
+| --- | --- |
+| Protokol | HTTP(S), JSON. Kirim `Accept: application/json` di setiap permintaan |
+| Autentikasi | Token bearer Laravel Sanctum di header `Authorization`. Tidak memakai cookie atau session |
+| Status | Stateless: setiap permintaan membawa token, dan pemilik token dibaca ulang dari database |
+| Satu pintu login | `POST /api/login` untuk keempat aktor; `data.actor` menentukan portal mana yang dibuka |
+| Pemisahan klien | Token staf hanya berlaku di endpoint staf; token nasabah hanya di `/api/customer/*` (selainnya `403`) |
+| Pembaruan data | **Polling**, bukan push. Tidak ada WebSocket atau notifikasi push |
+| File | Laporan, struk, dan mutasi dikirim sebagai PDF (`Content-Type: application/pdf`) |
+| CORS | Semua origin diizinkan, tanpa credentials, tanpa header respons yang diekspos |
+
+<Aside type="note" title="Mengapa polling">
+Permintaan persetujuan penarikan dibuat saat nasabah berdiri di depan loket dan hanya
+berlaku 120 detik, jadi polling cukup. Teller memeriksa status setiap sekitar 2 detik;
+aplikasi nasabah memeriksa daftar permintaan saat terbuka.
+</Aside>
+
+## Lapisan backend
+
+Setiap lapisan punya satu tanggung jawab. Tidak ada Laravel policy atau gate;
+otorisasi dilakukan oleh middleware route, beberapa pemeriksaan kepemilikan di
+controller, dan aturan bisnis di service.
+
+| Lapisan | Lokasi | Tanggung jawab |
+| --- | --- | --- |
+| Route | `routes/api.php` | Path, metode HTTP, middleware per grup |
+| Middleware | `app/Http/Middleware` + Sanctum | Token valid, jenis aktor, peran, status aktif, rate limit |
+| Form Request | `app/Http/Requests` | Validasi field (`422` dengan `errors`) |
+| Controller | `app/Http/Controllers/API` | Mengambil input, cek kepemilikan (`404`), memanggil service, memilih resource |
+| Service | `app/Services` | Aturan bisnis, transaksi database, row lock, jurnal |
+| Model | `app/Models` | Relasi Eloquent, cast, penjaga immutabilitas |
+| Resource | `app/Http/Resources` | Bentuk JSON respons; menyembunyikan PIN, password, idempotency key |
+| Exception | `app/Exceptions` | Aturan bisnis yang menolak permintaan, dirender sebagai `422` |
+
+<FileTree>
+- app/
+  - Enums/ status, peran, tipe transaksi, kode akun
+  - Exceptions/ BankingException dan turunannya
+  - Http/
+    - Controllers/API/
+      - Admin/ CustomerController, StaffController
+      - Audit/ JournalController, TransactionController
+      - Customer/ AccountController, AuthController, WithdrawalAuthorizationController
+      - Staff/ AuthController
+      - Supervisor/ CashTransferController, DailyReportController
+      - Teller/ CustomerLookupController, DailyReportController, ShiftController, TransactionController, WithdrawalAuthorizationController
+      - LoginController.php
+      - MajorController.php
+      - ReportController.php
+      - SettingsController.php
+    - Middleware/ EnsureCustomer, EnsureStaffRole
+    - Requests/
+    - Resources/
+  - Models/
+  - Services/
+- config/bank.php
+- database/migrations/
+- routes/
+  - api.php
+  - console.php
+</FileTree>
+
+## Perjalanan satu permintaan
+
+Contoh: teller mencatat setoran (`POST /api/teller/deposits`).
+
+<Mermaid
+	caption="Urutan pemeriksaan untuk permintaan setoran. Setiap kegagalan menghentikan proses tanpa menyimpan apa pun."
+	chart={`sequenceDiagram
+  autonumber
+  participant C as Klien teller
+  participant S as Sanctum
+  participant M as EnsureStaffRole
+  participant R as Form Request
+  participant T as TransactionService
+  participant D as Database
+  C->>S: POST /api/teller/deposits + Bearer token
+  S-->>C: 401 jika token tidak ada / kedaluwarsa
+  S->>M: pemilik token (dibaca ulang dari DB)
+  M-->>C: 403 jika bukan staf, diblokir, atau bukan teller
+  M->>R: validasi account_number, amount
+  R-->>C: 422 + errors jika field tidak valid
+  R->>T: deposit(customer, amount, teller, key)
+  T->>D: BEGIN · lock teller → shift → nasabah
+  T->>D: saldo += amount · insert transaksi · insert 2 jurnal
+  T->>D: COMMIT
+  T-->>C: 201 Transaction (atau 422 aturan bisnis)`}
+/>
+
+Hal penting dari urutan ini:
+
+- **Peran diperiksa sebelum data dicari.** Pengguna dengan peran salah selalu mendapat
+  `403`, bukan `404`, sehingga tidak bisa menebak apakah suatu id ada.
+- **Data milik orang lain menjawab `404`**, seolah-olah tidak ada.
+- **Semua perubahan uang terjadi dalam satu transaksi database.** Jika satu langkah
+  gagal, semuanya dibatalkan.
+
+## Atomisitas dan konkurensi
+
+| Teknik | Dipakai untuk |
+| --- | --- |
+| `DB::transaction()` | Saldo, transaksi, dan jurnal ditulis bersama atau tidak sama sekali |
+| Row lock dengan urutan tetap (teller → shift → otorisasi → nasabah) | Mencegah dua permintaan bersamaan mengubah saldo yang sama dan mencegah deadlock |
+| Update compare-and-set (`UPDATE … WHERE status = …`) | Perubahan status otorisasi penarikan: hanya satu dari dua permintaan yang berlomba yang berhasil |
+| Kunci unik database | Satu shift per teller per hari, satu koreksi per transaksi, satu transaksi per otorisasi, idempotency key per teller |
+| Constraint `CHECK` | Nominal > 0, saldo ≥ 0, keterkaitan koreksi, status otorisasi yang konsisten |
+| Header `Idempotency-Key` | Permintaan uang yang diulang setelah timeout tidak tercatat dua kali |
+
+Rinciannya ada di [Siklus transaksi](/concepts/transaction-lifecycle/) dan
+[Skema database](/reference/database-schema/).

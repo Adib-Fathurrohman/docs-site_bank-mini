@@ -1,0 +1,38 @@
+---
+title: Supervisor
+description: Apa yang dapat dan tidak dapat dilakukan supervisor, beserta endpoint yang dipakainya.
+sidebar:
+  order: 2
+sources:
+  - docs/RBAC.md
+  - routes/api.php
+---
+
+**Peran:** `supervisor` (tabel `users`). **Klien:** aplikasi web staf. **Fokus:**
+otorisasi kas fisik, pemeriksaan laporan harian, dan pengawasan operasional.
+
+## Dapat
+
+| Kemampuan | Endpoint |
+| --- | --- |
+| Melihat semua laporan harian teller (shift terbuka menampilkan total langsung) | `GET /api/supervisor/daily-reports`, `/{id}` |
+| Menyetujui laporan (kas pindah ke brankas), menahan, atau menolak (shift dibuka kembali) | `POST /api/supervisor/daily-reports/{id}/approve`, `/hold`, `/reject` |
+| Mencetak PDF laporan harian | `GET /api/supervisor/daily-reports/{id}/export` |
+| Melihat buku brankas | `GET /api/supervisor/cash-transfers`, `/{id}` |
+| Mengotorisasi koreksi teller dengan mengetik username dan password sendiri di layar teller | — (lewat `POST /api/teller/transactions/{id}/correct` milik teller) |
+| Membaca log audit, jurnal, dan neraca saldo | `GET /api/audit/*` |
+| Mengunduh PDF jurnal, jejak audit, mutasi, dan laporan tahunan | `…/export`, `GET /api/customers/{id}/statement`, `GET /api/reports/annual` |
+| Melihat daftar staf dan rekening | `GET /api/staff`, `GET /api/customers` |
+| Membaca jurusan dan pengaturan | `GET /api/majors`, `GET /api/settings` |
+
+## Tidak dapat
+
+- Membuat atau mengubah staf maupun rekening; mengubah pengaturan.
+- Mencatat transaksi atau menjalankan shift; memanggil endpoint koreksi sendiri.
+- Mencetak kartu nasabah.
+- Menyetujui laporan secara massal (laporan diperiksa satu per satu).
+- Melihat daftar khusus permintaan otorisasi penarikan (otorisasi terlihat di detail
+  transaksi audit).
+
+Terkait: [Shift dan laporan harian](/workflows/shift-management/) ·
+[Koreksi transaksi](/workflows/correction/) · [API Supervisor](/api/supervisor/)

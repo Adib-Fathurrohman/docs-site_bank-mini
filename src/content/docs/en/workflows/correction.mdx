@@ -1,0 +1,105 @@
+---
+title: Correcting a transaction
+description: Reversing a mistaken deposit or withdrawal with a correction transaction authorized by a supervisor.
+sidebar:
+  order: 7
+sources:
+  - app/Http/Controllers/API/Teller/TransactionController.php
+  - app/Services/TransactionService.php
+  - app/Services/DailyReportService.php
+  - docs/WORKFLOWS.md
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+A saved transaction is never edited. A typo is reversed with a **correction
+transaction**, then the teller records the right amount as a new transaction.
+
+## Summary
+
+| | |
+| --- | --- |
+| Actor | Teller, authorized by a supervisor |
+| Endpoint | `POST /api/teller/transactions/{id}/correct` |
+| Preconditions | The original is the teller's own `deposit`/`withdrawal`; not corrected yet; its shift is still active (`open` or `rejected`) and is the teller's active shift |
+| Input | `reason` (max 255), `supervisor_username`, `supervisor_password` |
+| Limits | 10 requests per minute per teller; supports `Idempotency-Key` |
+
+## Flow
+
+<Mermaid
+	caption="The supervisor types their credentials on the teller's screen; the supervisor does not call this endpoint themselves."
+	chart={`sequenceDiagram
+  autonumber
+  participant T as Teller
+  participant S as Supervisor
+  participant A as API
+  participant D as Database
+  T->>S: asks for a correction authorization
+  S->>T: types username + password on the teller's screen
+  T->>A: POST /teller/transactions/{id}/correct {reason, supervisor_username, supervisor_password}
+  A->>A: validate an active supervisor + password
+  A->>D: lock teller → shift (must be the original's) → original → customer
+  A->>D: check not corrected · reverse balance · insert correction · opposite journal
+  A-->>T: 201 Transaction (corrects_transaction_id, authorized_by)`}
+/>
+
+<Steps>
+
+1. The teller picks a transaction from the running shift and enters a reason.
+2. The supervisor types their own username and password.
+3. The backend creates a new transaction of the same amount in the opposite direction
+   (`deposit_correction` or `withdrawal_correction`), with `note` = the reason and
+   `authorized_by` = the supervisor.
+4. The teller records the right amount as a new deposit or withdrawal.
+
+</Steps>
+
+```json title="Body"
+{ "reason": "Salah ketik, seharusnya Rp7.000", "supervisor_username": "supervisor", "supervisor_password": "password" }
+```
+
+```json title="201 — example response from the demo database"
+{
+  "data": {
+    "id": 7, "type": "deposit_correction", "type_label": "Koreksi setoran",
+    "amount": 70000, "amount_in_words": "tujuh puluh ribu rupiah",
+    "balance_before": 1070000, "balance_after": 1000000,
+    "created_at": "2026-10-27T13:10:38.000000Z", "daily_report_id": 2,
+    "corrects_transaction_id": 6, "note": "Salah ketik, seharusnya Rp7.000",
+    "authorized_by": { "id": 2, "full_name": "Supervisor Bank Mini" },
+    "customer": { "id": 3, "account_number": "RPL-2026-002", "full_name": "Citra Lestari" }
+  }
+}
+```
+
+## Rules
+
+| Rule | Result when broken |
+| --- | --- |
+| Only the teller's own transaction | `404` |
+| A transaction can be corrected only once | `422 Transaksi ini sudah pernah dikoreksi.` |
+| Corrections cannot be corrected | `422 Transaksi koreksi tidak dapat dikoreksi lagi.` |
+| Only in the shift where the original was recorded, while that shift is active | `422 Koreksi hanya dapat dilakukan pada shift tempat transaksi asli dicatat, …` |
+| Correct credentials of an active supervisor | `422` with `errors.supervisor_password` = `Otorisasi supervisor gagal. …` |
+| A deposit correction cannot make the balance negative | `422 Saldo nasabah sudah tidak mencukupi untuk membatalkan setoran ini.` |
+| Account `active` or `suspended` | Allowed on suspended accounts |
+| At most 10 per minute | `429` |
+
+A deposit correction may take the balance **below the minimum balance**, but never
+below zero. Shift totals are net of corrections, so the drawer still reconciles at
+closing.
+
+<Aside type="note" title="Corrections after a rejected report">
+If the supervisor rejects the daily report, the shift becomes active again and its
+transactions can be corrected again, on any day, until the shift is closed again.
+</Aside>
+
+## Not available
+
+- Partial corrections (a correction always reverses the full amount).
+- Editing or deleting transactions.
+- Correction approval in the customer app.
+
+Full endpoints: [Teller API](/en/api/teller/#corrections).

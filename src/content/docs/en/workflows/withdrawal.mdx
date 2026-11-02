@@ -1,0 +1,104 @@
+---
+title: Cash withdrawal
+description: The two ways to authorize a withdrawal, and the flow where the customer types the PIN at the counter (Mode B).
+sidebar:
+  order: 5
+sources:
+  - app/Http/Controllers/API/Teller/TransactionController.php
+  - app/Services/TransactionService.php
+  - app/Services/PinService.php
+  - docs/WORKFLOWS.md
+  - docs/PIN_VERIFICATION.md
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+A withdrawal is always started by the **teller** and always needs the **customer's
+PIN**. How the customer gives the PIN depends on the `withdrawal_verification`
+setting.
+
+## Pick the flow
+
+| Mode | Setting | Who types the PIN | Page |
+| --- | --- | --- | --- |
+| A · Approval in the app (default) | `mobile` or `both` | The customer, on their own phone | [PIN approval in the app](/en/workflows/withdrawal-pin-authorization/) |
+| B · PIN at the counter | `terminal` or `both` | The customer, on the teller's screen | This page |
+
+Both produce the same `withdrawal` transaction: balance − amount, journal Debit 201
+Tabungan Nasabah / Credit 101 Kas, and the minimum balance must remain.
+
+<Aside type="caution" title="Mode B is off by default">
+With the default `mobile` setting, `POST /api/teller/withdrawals` answers `422`
+`Penarikan harus disetujui nasabah melalui aplikasi. Buat permintaan persetujuan
+penarikan untuk nasabah.` An admin must switch the setting to `terminal` or `both` to
+use Mode B.
+</Aside>
+
+## Mode B: PIN at the counter
+
+| | |
+| --- | --- |
+| Actor | Teller, with the customer typing the PIN |
+| Preconditions | As for deposits; mode `terminal`/`both`; PIN not locked; balance − amount ≥ minimum balance |
+| Endpoint | `POST /api/teller/withdrawals` |
+| Input | `account_number`, `amount`, `pin` (exactly 6 digits), optional `Idempotency-Key` header |
+
+<Mermaid
+	caption="Mode B's checks. The PIN is checked first, in its own database transaction."
+	chart={`flowchart TD
+  A["POST /teller/withdrawals"] --> M{"Mode terminal / both?"}
+  M -- "no" --> M1["422 must be approved in the app"]
+  M -- "yes" --> I{"Idempotency-Key matches<br/>an earlier withdrawal?"}
+  I -- "yes" --> I1["200 original transaction<br/>PIN not re-checked"]
+  I -- "no" --> P["PinService::verify<br/>own DB transaction"]
+  P -- "wrong / locked" --> P1["422 · the attempt is still saved"]
+  P -- "correct" --> T["DB transaction:<br/>lock teller → shift → customer"]
+  T --> C{"Shift, status,<br/>minimum balance"}
+  C -- "fail" --> C1["422 · rollback"]
+  C -- "pass" --> W["balance −= amount<br/>insert transaction + 2 journal lines"]
+  W --> OK["201 Transaction"]`}
+/>
+
+<Steps>
+
+1. The teller looks up the customer and enters the amount.
+2. The customer types their 6-digit PIN on the teller's confirmation screen.
+3. The teller client sends:
+
+   ```json
+   { "account_number": "RPL-2026-001", "amount": 30000, "pin": "123456" }
+   ```
+
+4. The backend checks the PIN (shared lock), then records the withdrawal like a
+   deposit in the opposite direction, with the minimum-balance check.
+
+</Steps>
+
+### Failures
+
+| Status | Message | Cause |
+| --- | --- | --- |
+| `422` | `Penarikan harus disetujui nasabah melalui aplikasi. …` | Setting is `mobile` |
+| `422` | `PIN salah. Sisa percobaan: 2.` (+ `remaining_attempts`, `pin_locked_until`) | Wrong PIN |
+| `422` | `PIN diblokir sementara karena terlalu banyak percobaan salah. Coba lagi pukul HH:MM.` | PIN locked |
+| `422` | `Saldo tidak mencukupi. Saldo minimum Rp10.000 harus tetap tersisa; penarikan maksimal Rp990.000.` | Breaks the minimum balance |
+| `422` | Every deposit failure | Shift, account status, validation, idempotency |
+
+<Aside type="caution" title="Limitation L2 · Order of checks">
+The PIN is checked **before** the shift, account status and balance. A wrong PIN still
+counts even when the withdrawal would fail anyway, and a correct PIN resets the counter
+even if the withdrawal then fails. Clients should check `can_transact` from
+`GET /teller/shift`, and the status, balance and `pin_locked_until` from the lookup,
+**before** asking for the PIN.
+</Aside>
+
+<Aside type="danger" title="The PIN passes through the teller client">
+In Mode B the PIN is typed on the teller's device and sent by the teller client. This
+is why Mode A is the default. Clients must never store or log the PIN.
+</Aside>
+
+Mode B transactions have no `withdrawal_authorization` in the response; Mode A
+transactions have `withdrawal_authorization: { id, method: "mobile", approved_at }`.
+
+Full endpoints: [Teller API](/en/api/teller/#cash-withdrawal-pin-at-the-counter).

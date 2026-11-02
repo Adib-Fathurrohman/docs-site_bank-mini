@@ -1,0 +1,252 @@
+---
+title: Admin
+description: Endpoint data referensi, pengaturan, manajemen staf, dan rekening nasabah. Sebagian juga dapat dibaca supervisor.
+sidebar:
+  order: 3
+sources:
+  - routes/api.php
+  - app/Http/Controllers/API/Admin
+  - app/Http/Controllers/API/SettingsController.php
+  - app/Http/Requests
+  - app/Http/Resources
+  - docs/API.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Endpoint from '../../../components/Endpoint.astro';
+
+Alur terkait: [Manajemen rekening dan staf](/workflows/account-management/).
+
+## Data referensi
+
+<Endpoint method="GET" path="/api/majors" roles="admin,supervisor,teller" />
+
+Semua jurusan beserta kodenya, tidak dipaginasi, diurutkan berdasarkan nama:
+
+```json
+{ "data": [{ "id": 4, "code": "AK", "major_name": "Akuntansi dan Keuangan Lembaga" }, "..."] }
+```
+
+Jurusan hanya dapat dibaca; tidak ada endpoint untuk membuat atau mengubahnya.
+
+<Endpoint method="GET" path="/api/settings" roles="admin,supervisor,teller" />
+
+Pengaturan saat ini. Layar teller membutuhkan mode pemindai, saldo minimum, dan mode
+verifikasi penarikan.
+
+## Pengaturan
+
+<Endpoint method="PUT|PATCH" path="/api/admin/settings" roles="admin" />
+
+Kirim sebagian atau semua kunci. Responsnya sama dengan `GET /api/settings`.
+
+| Kunci | Tipe | Bawaan | Arti |
+| --- | --- | --- | --- |
+| `min_balance` | Bilangan bulat 0–1.000.000 | `10000` | Saldo yang harus tersisa setelah penarikan |
+| `qr_scanner_mode` | `webcam`, `usb`, `disabled` | `webcam` | Cara layar teller membaca kartu QR (kamera, pemindai USB yang mengetik seperti keyboard, atau ketik manual saja) |
+| `withdrawal_verification` | `mobile`, `terminal`, `both` | `mobile` | Persetujuan PIN di aplikasi nasabah, PIN diketik di loket (`POST /teller/withdrawals`), atau keduanya |
+
+```json title="200"
+{ "data": { "min_balance": 10000, "qr_scanner_mode": "webcam", "withdrawal_verification": "mobile" } }
+```
+
+## Staf
+
+<Endpoint method="GET" path="/api/staff" roles="admin,supervisor" />
+
+<Endpoint method="GET" path="/api/staff/{staff}" roles="admin,supervisor" />
+
+[Staff](#objek-staff) diurutkan berdasarkan nama. `per_page` bawaan 15.
+
+| Query | Keterangan |
+| --- | --- |
+| `status` | `active` (bawaan), `inactive`, `all` |
+| `role` | `admin`, `supervisor`, `teller` |
+| `search` | Username atau nama lengkap |
+
+<Aside type="caution" title="L11 · Nilai filter tidak divalidasi">
+Nilai `role` dan `status` yang tidak dikenal menghasilkan daftar kosong atau nilai
+bawaan, bukan `422`.
+</Aside>
+
+<Endpoint method="POST" path="/api/admin/staff" roles="admin" />
+
+Membuat teller atau supervisor.
+
+| Field | Aturan |
+| --- | --- |
+| `username` | Wajib, huruf/angka/`-`/`_`, maks. 50, unik |
+| `full_name` | Wajib, maks. 255 |
+| `password` | Wajib, min. 8 |
+| `role` | Wajib, `teller` atau `supervisor` (`admin` ditolak) |
+| `class` | Opsional, maks. 20 (misalnya `XI AK 2`) |
+| `phone` | Opsional, angka, spasi, `+`, `-`, maks. 20 (nomor WhatsApp) |
+
+```json title="201 — contoh dari basis data demo"
+{
+  "data": {
+    "id": 4, "username": "rina", "full_name": "Rina Wulandari", "class": "XI AK 2",
+    "phone": "081200000002", "role": "teller", "is_active": true,
+    "created_at": "2026-10-27T13:10:36.000000Z", "updated_at": "2026-10-27T13:10:36.000000Z"
+  }
+}
+```
+
+<Endpoint method="PUT|PATCH" path="/api/admin/staff/{staff}" roles="admin" />
+
+Sebagian dari `username`, `full_name`, `password`, `role` (`teller`/`supervisor`),
+`class`, `phone`. **403** untuk akun administrator:
+`Akun administrator tidak dapat diubah melalui API.`
+
+<Endpoint method="POST" path="/api/admin/staff/{staff}/block" roles="admin" />
+
+<Endpoint method="POST" path="/api/admin/staff/{staff}/unblock" roles="admin" />
+
+Blokir menyimpan akun (riwayatnya harus tetap menunjuk ke akun itu), mengatur
+`is_active` menjadi `false`, dan mencabut tokennya. Buka blokir memulihkan akses.
+**200** dengan [Staff](#objek-staff) terbaru. **403** untuk administrator.
+
+<Endpoint method="DELETE" path="/api/admin/staff/{staff}" roles="admin" />
+
+Menghapus permanen akun yang belum pernah dipakai. **200**
+`{ "message": "Akun staf dihapus." }`. **409** jika ada transaksi, laporan, atau
+persetujuan yang merujuknya (`ON DELETE RESTRICT`):
+
+```json
+{ "message": "Staf ini memiliki riwayat transaksi, laporan, atau persetujuan sehingga tidak dapat dihapus. Blokir akunnya saja." }
+```
+
+<Endpoint method="POST" path="/api/admin/staff/import" roles="admin" />
+
+Membuat banyak teller/supervisor dari spreadsheet. `multipart/form-data` dengan field
+`file` (`.xlsx` atau `.csv` dengan pemisah koma atau titik koma, maks. 2 MB, maks. 500
+baris). Baris pertama adalah header; header berbahasa Indonesia diterima:
+
+| Data | Header yang diterima |
+| --- | --- |
+| Username (wajib) | `username` |
+| Nama lengkap (wajib) | `full_name`, `nama`, `nama_lengkap` |
+| Password (opsional, min. 8) | `password`, `kata_sandi` |
+| Peran (opsional, bawaan `teller`) | `role`, `peran` |
+| Kelas (opsional) | `class`, `kelas` |
+| Telepon (opsional) | `phone`, `no_wa`, `whatsapp`, `no_hp` |
+
+Semua atau tidak sama sekali: jika satu baris tidak valid, tidak ada akun yang dibuat.
+Baris tanpa password mendapat password acak 10 karakter, dikembalikan **sekali** di
+`generated_password`.
+
+```text title="Contoh file (Excel dengan pengaturan regional Indonesia, pemisah ;)"
+Username;Nama;Kelas;No WA;Password
+rina;Rina Wulandari;XI AK 1;081200000002;rahasia123
+dodi;Dodi Saputra;XI AK 2;081200000003;
+```
+
+```json title="201 — contoh dari basis data demo (dipendekkan)"
+{
+  "data": {
+    "created": 2,
+    "users": [
+      { "id": 4, "username": "rina", "full_name": "Rina Wulandari", "role": "teller", "...": "...", "generated_password": null },
+      { "id": 5, "username": "dodi", "full_name": "Dodi Saputra", "role": "teller", "...": "...", "generated_password": "7cCQgOcUs6" }
+    ]
+  }
+}
+```
+
+**422:** error dengan kunci `rows.{index}.{field}` (index 0 = baris 2 di spreadsheet),
+dan pesannya menyebut baris spreadsheet:
+
+```json
+{ "message": "The username (baris 2) has already been taken.", "errors": { "rows.0.username": ["The username (baris 2) has already been taken."] } }
+```
+
+## Rekening nasabah
+
+<Endpoint method="GET" path="/api/customers" roles="admin,supervisor" />
+
+<Endpoint method="GET" path="/api/customers/{customer}" roles="admin,supervisor" />
+
+Daftar [Customer](#objek-customer) diurutkan berdasarkan nama (`per_page` bawaan 15).
+Rekening yang ditutup disembunyikan dari daftar secara bawaan, tetapi selalu dapat
+dibuka berdasarkan id.
+
+| Query | Keterangan |
+| --- | --- |
+| `search` | Nama, NIS, atau nomor rekening |
+| `major_id`, `class`, `group`, `status` | Filter (tidak divalidasi, lihat L11) |
+| `trashed` | `with` menyertakan rekening yang ditutup, `only` hanya menampilkan yang ditutup |
+
+<Endpoint method="POST" path="/api/admin/customers" roles="admin" />
+
+Membuka rekening. Nomor rekening dibuat otomatis; rekening mulai `active` dengan saldo
+`0`. Field `account_number`, `account_status`, dan `balance` di body diabaikan.
+
+| Field | Aturan |
+| --- | --- |
+| `nis` | Wajib, maks. 20, unik (termasuk rekening yang ditutup) |
+| `full_name` | Wajib, maks. 255 |
+| `class` | Wajib, `X`/`XI`/`XII` |
+| `major_id` | Wajib, jurusan yang ada |
+| `group` | Wajib, `1`–`4` |
+| `pin` | Wajib, tepat 6 digit (disimpan ter-hash) |
+
+```json title="201 — contoh dari basis data demo"
+{
+  "data": {
+    "id": 4, "account_number": "AK-2026-001", "nis": "20260004", "full_name": "Dewi Anggraini",
+    "class": "X", "group": "2",
+    "major": { "id": 4, "code": "AK", "major_name": "Akuntansi dan Keuangan Lembaga" },
+    "account_status": "active", "balance": 0,
+    "created_at": "2026-10-27T13:10:36.000000Z", "updated_at": "2026-10-27T13:10:36.000000Z", "deleted_at": null
+  }
+}
+```
+
+<Endpoint method="PUT|PATCH" path="/api/admin/customers/{customer}" roles="admin" />
+
+Sebagian dari `nis`, `full_name`, `class`, `major_id`, `group`, `account_status`
+(`active` atau `suspended` saja), dan `pin` (6 digit; reset PIN juga membuka blokir
+PIN). Nomor rekening dan saldo tidak dapat diubah. Rekening yang ditutup menjawab `404`.
+
+<Endpoint method="POST" path="/api/admin/customers/{customer}/deactivate" roles="admin" />
+
+Penutupan (lulus): status `inactive`, token dicabut, soft delete. Riwayat tetap ada.
+**200** Customer dengan `deleted_at`. Tidak ada pemeriksaan saldo (lihat L5).
+
+<Endpoint method="GET" path="/api/admin/customers/{customer}/card" roles="admin" />
+
+Data untuk mencetak kartu nasabah. Render `qr_payload` sebagai kode QR; backend tidak
+membuat gambarnya.
+
+```json title="200 — contoh dari basis data demo"
+{
+  "data": {
+    "account_number": "AK-2026-001", "nis": "20260004", "full_name": "Dewi Anggraini",
+    "class": "X", "group": "2",
+    "major": { "code": "AK", "major_name": "Akuntansi dan Keuangan Lembaga" },
+    "account_status": "active",
+    "qr_payload": "BANKMINI:AK-2026-001"
+  }
+}
+```
+
+## Objek
+
+### Objek Staff
+
+`id`, `username`, `full_name`, `class` (nullable), `phone` (nullable), `role`,
+`is_active`, `created_at`, `updated_at`. Tidak pernah dikembalikan: `password`,
+`remember_token`.
+
+### Objek Customer
+
+| Field | Keterangan |
+| --- | --- |
+| `id`, `nis`, `full_name`, `class`, `group` | |
+| `account_number` | Misalnya `RPL-2026-001`, dibuat otomatis |
+| `major` | `{ id, code, major_name }` |
+| `account_status` | `active`, `suspended`, `inactive` |
+| `balance` | Rupiah |
+| `created_at`, `updated_at`, `deleted_at` | `deleted_at` terisi saat rekening ditutup |
+
+Tidak pernah dikembalikan: `pin` (hash), `pin_failed_attempts`.

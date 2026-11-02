@@ -1,0 +1,152 @@
+---
+/*
+ * Endpoint header for the API reference:
+ *
+ *   <Endpoint method="POST" path="/api/teller/deposits" roles="teller" />
+ *
+ * `method` may list several methods separated by "|" (e.g. "PUT|PATCH").
+ * `path` must match a route in src/data/api-summary.json exactly;
+ * `npm run check:api` verifies this.
+ */
+interface Props {
+	method: string;
+	path: string;
+	roles?: string;
+	limit?: string;
+}
+
+const { method, path, roles, limit } = Astro.props;
+const methods = method.split('|');
+const roleList = roles ? roles.split(',').map((role) => role.trim()) : [];
+const isEnglish = Astro.locals.starlightRoute.lang === 'en';
+const accessLabel = isEnglish ? 'Access' : 'Akses';
+const limitLabel = isEnglish ? 'Rate limit' : 'Batas permintaan';
+---
+
+<div class="endpoint not-content" data-endpoint={`${method} ${path}`}>
+	<div class="endpoint-line">
+		<span class="methods">
+			{methods.map((m) => <span class={`method method-${m.toLowerCase()}`}>{m}</span>)}
+		</span>
+		<code class="path">{path}</code>
+	</div>
+	{
+		(roleList.length > 0 || limit) && (
+			<dl class="endpoint-meta">
+				{roleList.length > 0 && (
+					<div>
+						<dt>{accessLabel}</dt>
+						<dd>
+							{roleList.map((role) => (
+								<span class="role">{role}</span>
+							))}
+						</dd>
+					</div>
+				)}
+				{limit && (
+					<div>
+						<dt>{limitLabel}</dt>
+						<dd>{limit}</dd>
+					</div>
+				)}
+			</dl>
+		)
+	}
+</div>
+
+<style>
+	.endpoint {
+		margin-block: 1rem 1.25rem;
+		border: 1px solid var(--bm-border);
+		border-radius: 0.5rem;
+		background-color: var(--bm-surface);
+		font-size: 0.875rem;
+	}
+
+	.endpoint-line {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.6rem;
+		padding: 0.6rem 0.8rem;
+	}
+
+	.methods {
+		display: inline-flex;
+		gap: 0.3rem;
+	}
+
+	.method {
+		padding: 0.1rem 0.45rem;
+		border-radius: 0.3rem;
+		font-family: var(--sl-font-mono);
+		font-size: 0.72rem;
+		font-weight: 700;
+		letter-spacing: 0.03em;
+		color: var(--sl-color-black);
+	}
+
+	.method-get {
+		background-color: var(--bm-method-get);
+	}
+
+	.method-post {
+		background-color: var(--bm-method-post);
+	}
+
+	.method-put,
+	.method-patch {
+		background-color: var(--bm-method-put);
+	}
+
+	.method-delete {
+		background-color: var(--bm-method-delete);
+	}
+
+	.path {
+		font-family: var(--sl-font-mono);
+		font-size: 0.85rem;
+		font-weight: 600;
+		color: var(--sl-color-white);
+		overflow-wrap: anywhere;
+	}
+
+	.endpoint-meta {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem 1.5rem;
+		margin: 0;
+		padding: 0.5rem 0.8rem;
+		border-top: 1px solid var(--bm-border);
+		font-size: 0.8rem;
+	}
+
+	.endpoint-meta div {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	dt {
+		font-weight: 600;
+		color: var(--sl-color-gray-3);
+	}
+
+	dd {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.3rem;
+		margin: 0;
+		color: var(--sl-color-gray-2);
+	}
+
+	.role {
+		padding: 0.05rem 0.45rem;
+		border: 1px solid var(--bm-border);
+		border-radius: 999px;
+		font-family: var(--sl-font-mono);
+		font-size: 0.72rem;
+		color: var(--sl-color-gray-1);
+		background-color: var(--sl-color-black);
+	}
+</style>

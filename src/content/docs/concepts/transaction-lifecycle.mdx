@@ -1,0 +1,128 @@
+---
+title: Siklus transaksi
+description: Jenis transaksi, cara transaksi dicatat secara atomik, koreksi, idempotensi, dan hubungan transaksi dengan shift dan jurnal.
+sidebar:
+  order: 3
+sources:
+  - app/Services/TransactionService.php
+  - app/Services/JournalService.php
+  - app/Models/Transaction.php
+  - database/migrations/2026_08_07_040023_create_transactions_table.php
+  - docs/DATA_MODEL.md
+  - docs/WORKFLOWS.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Mermaid from '../../../components/Mermaid.astro';
+
+Transaksi adalah catatan **permanen** perpindahan uang di rekening nasabah. Setelah
+tersimpan, transaksi tidak pernah diubah atau dihapus.
+
+## Jenis transaksi
+
+| `type` | Label | Efek ke saldo | Jurnal (debit / kredit) | Dibuat oleh |
+| --- | --- | --- | --- | --- |
+| `deposit` | Setor tunai | + nominal | 101 Kas / 201 Tabungan | `POST /teller/deposits` |
+| `withdrawal` | Tarik tunai | − nominal | 201 Tabungan / 101 Kas | `POST /teller/withdrawal-authorizations/{id}/complete` (persetujuan di aplikasi) atau `POST /teller/withdrawals` (PIN di loket) |
+| `deposit_correction` | Koreksi setoran | − nominal | 201 Tabungan / 101 Kas | Koreksi atas setoran |
+| `withdrawal_correction` | Koreksi penarikan | + nominal | 101 Kas / 201 Tabungan | Koreksi atas penarikan |
+
+<Aside type="note" title="Transaksi tidak punya status">
+Tidak ada kolom status. Transaksi hanya **tercatat** atau **tidak tercatat**:
+kegagalan tidak menyimpan apa pun. Transaksi dianggap "sudah dikoreksi" jika ada
+transaksi koreksi yang merujuknya (`corrected_by`).
+</Aside>
+
+## Perjalanan sebuah transaksi
+
+<Mermaid
+	caption="Dari pencatatan sampai final. Koreksi hanya mungkin selama shift asalnya masih aktif."
+	chart={`stateDiagram-v2
+  direction LR
+  [*] --> Tercatat: setor / tarik di shift yang terbuka
+  Tercatat --> Dikoreksi: koreksi (sekali, shift masih aktif, otorisasi supervisor)
+  Tercatat --> DalamLaporan: shift ditutup
+  Dikoreksi --> DalamLaporan: shift ditutup
+  DalamLaporan --> Tercatat: laporan ditolak, shift dibuka kembali
+  DalamLaporan --> Final: laporan disetujui
+  Final --> [*]
+  note right of Final
+    Kas dipindah ke brankas.
+    Tidak ada lagi koreksi.
+  end note`}
+/>
+
+1. **Dicatat** di shift teller yang terbuka dan bertanggal hari ini.
+2. **Dapat dikoreksi sekali** selama shift asalnya masih aktif (`open` atau `rejected`).
+3. **Masuk ke laporan harian** saat shift ditutup dengan uang fisik yang cocok.
+4. **Final** saat supervisor menyetujui laporan. Jika ditolak, shift dibuka kembali
+   dan koreksi kembali mungkin.
+
+## Pencatatan yang atomik
+
+Setor, tarik, dan koreksi berjalan di `TransactionService::record()` dalam **satu
+transaksi database**:
+
+<Mermaid
+	caption="Urutan untuk setor dan tarik di dalam satu transaksi database. Jika satu langkah gagal, semuanya dibatalkan."
+	chart={`flowchart TD
+  A["BEGIN"] --> B["Lock baris teller"]
+  B --> C["Lock shift aktif<br/>harus bertanggal hari ini"]
+  C --> D{"Idempotency-Key<br/>sudah dipakai?"}
+  D -- "ya, permintaan sama" --> R["Kembalikan transaksi lama · 200"]
+  D -- "tidak" --> E["Lock baris nasabah"]
+  E --> F{"Status rekening<br/>dan aturan saldo"}
+  F -- "gagal" --> X["ROLLBACK · 422"]
+  F -- "lolos" --> G["Ubah saldo"]
+  G --> H["Insert transaksi<br/>balance_before · balance_after"]
+  H --> I["Insert 2 baris jurnal"]
+  I --> J["COMMIT · 201"]`}
+/>
+
+- Urutan lock selalu sama (teller → shift → [otorisasi] → nasabah) untuk mencegah
+  deadlock.
+- `balance_before` dan `balance_after` disimpan di setiap transaksi.
+- Kegagalan tak terduga menghasilkan `500` dan **semuanya dibatalkan**.
+
+## Koreksi, bukan edit
+
+Kesalahan dibatalkan dengan **transaksi koreksi**: transaksi baru dengan nominal yang
+sama dan arah berlawanan, dengan jurnal berlawanan, yang menautkan ke transaksi asli
+(`corrects_transaction_id`).
+
+| Aturan | Penegak |
+| --- | --- |
+| Hanya transaksi milik teller sendiri | Controller (`404` jika bukan) |
+| Hanya selama shift asalnya masih aktif dan merupakan shift aktif teller | Service |
+| Satu transaksi hanya dapat dikoreksi sekali | Kunci unik `corrects_transaction_id` |
+| Transaksi koreksi tidak dapat dikoreksi lagi | Service + `CHECK` |
+| Butuh username dan password supervisor aktif, serta alasan | Service |
+| Koreksi setoran boleh membuat saldo di bawah saldo minimum, tetapi tidak di bawah nol | Service + `CHECK balance >= 0` |
+| Boleh pada rekening yang ditangguhkan | Service |
+
+Koreksi sebagian tidak tersedia: koreksi selalu membalik nominal penuh, lalu teller
+mencatat nominal yang benar sebagai transaksi baru. Lihat
+[Alur koreksi](/workflows/correction/).
+
+## Idempotensi
+
+`POST /teller/deposits`, `/teller/withdrawals`, dan `/teller/transactions/{id}/correct`
+menerima header opsional `Idempotency-Key` (huruf, angka, `_ . : -`, maksimal 100).
+
+| Situasi | Hasil |
+| --- | --- |
+| Kunci baru | Transaksi dicatat, `201` |
+| Kunci sama, permintaan sama | Tidak ada yang baru dicatat. `200`, header `Idempotent-Replayed: true`, transaksi asli |
+| Kunci sama, nominal/nasabah/jenis berbeda | `422 Idempotency-Key ini sudah dipakai untuk transaksi lain. …` |
+
+Kunci berlaku per teller dan tidak pernah kedaluwarsa. Penyelesaian otorisasi
+penarikan (`…/complete`) tidak butuh kunci karena sudah idempoten: pemanggilan
+ulang mengembalikan transaksi yang sama.
+
+## Hubungan dengan shift dan jurnal
+
+- Setiap transaksi punya `daily_report_id` (shift tempat ia dicatat) dan `user_id`
+  (teller).
+- Total shift (`total_deposit`, `total_withdrawal`) dihitung **bersih dari koreksi**.
+- Setiap transaksi punya tepat **dua baris jurnal**, satu debit dan satu kredit,
+  dengan nominal yang sama. Lihat [Jejak audit dan jurnal](/concepts/audit-trail/).

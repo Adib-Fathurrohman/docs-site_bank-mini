@@ -1,0 +1,89 @@
+---
+title: Keterbatasan yang diketahui
+description: Perilaku backend yang belum diperbaiki, inkonsistensi yang tercatat, fitur yang belum tersedia, dan perbedaan di dokumentasi sumber.
+sidebar:
+  order: 5
+sources:
+  - docs/BACKEND_CHECKPOINT.md
+  - docs/FRONTEND_HANDOFF.md
+  - docs/WORKFLOWS.md
+  - PRD.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Keterbatasan backend
+
+Perilaku saat ini yang belum diperbaiki. Penomoran mengikuti
+`docs/BACKEND_CHECKPOINT.md`; *terverifikasi* berarti dikonfirmasi dengan menjalankan
+kode.
+
+| # | Keterbatasan | Dampak bagi klien |
+| --- | --- | --- |
+| L1 | Nominal tidak wajib kelipatan 100, padahal uang dihitung dalam pecahan ≥ Rp100. Nominal seperti Rp150 membuat shift tidak dapat ditutup sampai dikoreksi (*terverifikasi*) | Paksa kelipatan Rp100 di klien teller |
+| L2 | Mode B (`POST /teller/withdrawals`) memeriksa PIN sebelum shift, status, dan saldo | Di mode `terminal`, periksa dulu `can_transact`, status, saldo, dan `pin_locked_until` |
+| L3 | Shift yang ditolak masih menampilkan `physical_balance`, `difference`, dan `closing_counts` lama sampai ditutup lagi (*terverifikasi*) | Untuk `status = rejected`, abaikan atau beri label "hitungan sebelumnya" |
+| L4 | CORS tidak mengekspos header respons (`Idempotent-Replayed`, `Content-Disposition`) | Bedakan ulangan dengan `201`/`200`; beri nama PDF di klien; atau pakai proxy same-origin |
+| L5 | Menutup rekening tidak butuh saldo nol dan tidak dapat dibatalkan | Peringatkan sebelum menutup rekening bersaldo |
+| L6 | Staf tidak dapat mengganti password sendiri; akun admin tidak dapat diubah lewat API | Jangan buat halaman "ganti password" untuk staf |
+| L7 | Tidak ada refresh token (8 jam absolut) | Login ulang saat `401` |
+| L8 | Tidak ada lupa password/PIN | Tampilkan "hubungi administrator" |
+| L9 | Bahasa campuran: pesan bisnis Indonesia, pesan validasi Inggris | Petakan pesan field jika butuh satu bahasa |
+| L10 | Laporan tahunan, jurnal, dan ekspor audit hanya PDF | Bangun tabel dari JSON `/audit/*` |
+| L11 | Nilai filter `/customers` dan `/staff` tidak divalidasi | Pakai dropdown bernilai tetap |
+| L12 | `qr_scanner_mode` hanya disimpan; lookup tetap menerima QR walau mode `disabled` | Klien yang menentukan apa yang ditawarkan |
+| L13 | Jurusan tidak dapat dikelola lewat API | Dropdown hanya baca |
+| L14 | Teller hanya dapat mencari satu nasabah; tidak ada daftar rekening untuk teller | Tidak ada penelusuran rekening untuk teller |
+| L15 | `customers.balance` integer 32-bit (maks. Rp2.147.483.647) | Tidak relevan untuk skala sekolah |
+| L16 | Idempotency key tidak pernah kedaluwarsa | Buat kunci baru per transaksi |
+| L17 | Payload QR tidak ditandatangani; hanya mengidentifikasi | Penarikan selalu butuh PIN |
+| L18 | Tidak ada parameter urutan di daftar mana pun | Terima urutan server |
+| L19 | Permintaan penarikan hanya lewat polling | Polling selama terlihat |
+| L20 | Token nasabah tanpa ability | Opsional: biometrik sebelum PIN pad |
+| L21 | Rekening ditutup antara persetujuan dan penyelesaian membuat `complete` menjawab `404` | Tampilkan pesan; mulai ulang |
+
+## Inkonsistensi yang tercatat
+
+Dari `docs/FRONTEND_HANDOFF.md` §19.
+
+| # | Hal | Status |
+| --- | --- | --- |
+| I1 | Matriks soal UKK tidak memberi admin akses "input transaksi" dan memberi akses baca jurnal. Backend juga membiarkan admin membaca log transaksi | Diterapkan seperti dijelaskan |
+| I2 | `POST /staff/login` dan `/customer/login` menduplikasi `POST /login` | Pakai `/login` saja |
+| I3 | Pesan login `Rekening ini sudah tidak aktif.` praktis tidak pernah muncul (rekening `inactive` selalu di-soft delete) | Perlakukan keduanya sebagai login gagal |
+| I6 | Wawancara UKK menanyakan peran Customer Service/Akuntansi dan produk tabungan siswa vs pegawai; backend menerapkan empat peran soal dan satu produk tabungan (akun 201) | Belum tersedia |
+
+## Belum tersedia
+
+Fitur berikut **tidak ada** di backend. Jangan membangun antarmuka untuknya.
+
+- Pendaftaran mandiri nasabah; transaksi yang dimulai nasabah; transfer antar-rekening.
+- Pinjaman, deposito berjangka, produk tabungan selain akun 201, biaya administrasi.
+- Memulihkan rekening yang ditutup; penutupan dengan pembayaran otomatis.
+- Koreksi sebagian; mengubah atau menghapus transaksi.
+- Persetujuan laporan massal; delegasi persetujuan.
+- Pemindahan kas dari brankas ke teller.
+- Lupa password/PIN; staf mengganti password sendiri; mengelola akun admin.
+- Manajemen jurusan; pengguna dengan banyak peran; integrasi absensi.
+- Notifikasi (push, email, WhatsApp).
+- Persetujuan di aplikasi untuk setoran atau koreksi (hanya penarikan).
+- Laporan tahunan versi JSON; gambar QR dari server.
+- Daftar otorisasi penarikan untuk admin atau supervisor.
+
+## Perbedaan di dokumentasi sumber
+
+Ditemukan saat menyusun situs ini. Dokumen sumber **tidak diubah**; perbedaannya
+dicatat di sini agar dapat diperbaiki.
+
+| Dokumen | Pernyataan | Keadaan sebenarnya |
+| --- | --- | --- |
+| `PRD.md` | Platform nasabah adalah **Mobile Web** (React responsif) | Dokumentasi backend dan rencana proyek menargetkan aplikasi **React Native + Expo**. Situs ini mengikuti dokumentasi backend |
+| `docs/BACKEND_CHECKPOINT.md` | Pekerjaan persetujuan mobile "**not committed yet**" | Sudah di-commit di `2cc6b58` |
+| `docs/README.md` | Test suite berisi **448** test | `docs/BACKEND_CHECKPOINT.md` menyebut **540** test lulus setelah fitur persetujuan mobile |
+| `docs/FRONTEND_HANDOFF.md` §10 | Baris `429` hanya menyebut login dan koreksi | Endpoint otorisasi penarikan juga punya rate limit (lihat [Ikhtisar API](/api/#batas-permintaan)) |
+| `.env.example` vs `README.md` | `.env.example` memakai `DB_CONNECTION=sqlite`; README menginstruksikan MariaDB | Tercatat juga di `docs/BACKEND_CHECKPOINT.md`; situs ini mengikuti README |
+
+<Aside type="note" title="Aplikasi klien">
+Keterbatasan di halaman ini milik backend. Status aplikasi web dan mobile ada di
+[Aplikasi klien](/clients/).
+</Aside>

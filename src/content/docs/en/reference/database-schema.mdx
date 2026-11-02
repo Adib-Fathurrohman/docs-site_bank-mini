@@ -1,0 +1,225 @@
+---
+title: Database schema
+description: Business tables, columns, relations, unique keys and CHECK constraints from the backend migrations.
+sidebar:
+  order: 1
+sources:
+  - database/migrations
+  - app/Enums
+  - docs/DATA_MODEL.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+The schema is created by the migrations in `database/migrations`. This page covers the
+business tables only; Laravel's own tables (`cache`, `jobs`, `sessions`,
+`password_reset_tokens`) and `personal_access_tokens` (Sanctum tokens) are not covered in
+detail.
+
+<Aside type="note" title="General principles">
+- All money is stored as `integer` Rupiah.
+- Every foreign key uses `ON DELETE RESTRICT`: anything with history cannot be deleted.
+- `CHECK` constraints are added with `ALTER TABLE` so they apply on MariaDB.
+</Aside>
+
+## Relationship diagram
+
+<Mermaid
+	caption="Relations between the business tables."
+	chart={`erDiagram
+  majors ||--o{ customers : "major_id"
+  users ||--o{ daily_reports : "teller_id"
+  users |o--o{ daily_reports : "supervisor_id"
+  users ||--o{ transactions : "user_id (teller)"
+  users |o--o{ transactions : "authorized_by"
+  users ||--o{ cash_transfers : "approved_by"
+  users |o--o{ settings : "updated_by"
+  users ||--o{ withdrawal_authorizations : "teller_id"
+  customers ||--o{ transactions : "customer_id"
+  customers ||--o{ withdrawal_authorizations : "customer_id"
+  daily_reports ||--o{ transactions : "daily_report_id"
+  daily_reports ||--o{ cash_counts : "daily_report_id"
+  daily_reports ||--o| cash_transfers : "daily_report_id"
+  daily_reports ||--o{ withdrawal_authorizations : "daily_report_id"
+  transactions ||--|{ accounting_journals : "transaction_id"
+  transactions |o--o| transactions : "corrects_transaction_id"
+  transactions |o--o| withdrawal_authorizations : "transaction_id"`}
+/>
+
+## `users`
+
+Staff: administrators, supervisors, tellers.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | bigint | PK |
+| `username` | string | Unique |
+| `password` | string | bcrypt hash |
+| `full_name` | string | |
+| `class` | string(20), nullable | Teller's class (students on duty) |
+| `phone` | string(20), nullable | WhatsApp number |
+| `role` | enum `admin`, `supervisor`, `teller` | One role per staff member |
+| `is_active` | boolean, default `true` | `false` = blocked |
+| `remember_token`, `created_at`, `updated_at` | | |
+
+## `majors`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | bigint | PK |
+| `code` | string(10) | Unique (AK, BR, BD, MP, DKV, RPL, TKJ, LPS) |
+| `major_name` | string | Unique |
+
+## `customers`
+
+Students' savings accounts.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | bigint | PK |
+| `account_number` | string | Unique, generated |
+| `nis` | string | Unique |
+| `full_name` | string | |
+| `class` | enum `X`, `XI`, `XII` | |
+| `major_id` | FK → `majors` | RESTRICT |
+| `group` | enum `1`–`4` | Parallel class |
+| `account_status` | enum `active`, `suspended`, `inactive` | Default `active` |
+| `pin` | string | bcrypt hash, hidden |
+| `pin_failed_attempts` | tinyint unsigned, default 0 | Consecutive wrong-PIN counter |
+| `pin_locked_until` | timestamp, nullable | End of the PIN lock |
+| `balance` | integer, default 0 | `CHECK (balance >= 0)` |
+| `deleted_at` | timestamp, nullable | Soft delete (closed account) |
+
+## `daily_reports`
+
+A teller's shift, which is also the daily report.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | bigint | PK |
+| `teller_id` | FK → `users` | RESTRICT |
+| `report_date` | date | **Unique with `teller_id`**: one shift per teller per day |
+| `status` | enum `open`, `submitted`, `on_hold`, `approved`, `rejected` | Default `open` |
+| `opening_balance` | integer unsigned | Opening balance |
+| `opened_at` | timestamp, nullable | |
+| `transaction_count`, `total_deposit`, `total_withdrawal` | integer unsigned | Snapshot at closing |
+| `system_balance` | integer, nullable | |
+| `physical_balance` | integer unsigned, nullable | Counted cash at closing |
+| `submitted_at`, `reviewed_at` | timestamp, nullable | |
+| `supervisor_id` | FK → `users`, nullable | Reviewer |
+| `supervisor_note` | text, nullable | |
+
+Index: (`status`, `report_date`). `difference` in API responses is computed, not a
+column.
+
+## `cash_counts`
+
+Cash counted per denomination when opening and closing a shift.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `daily_report_id` | FK → `daily_reports` | RESTRICT |
+| `stage` | enum (`opening`, `closing`) | From `CashCountStage` |
+| `denomination` | integer unsigned | `CHECK (denomination > 0)` |
+| `quantity` | integer unsigned | `CHECK (quantity > 0)`; only quantities > 0 are stored |
+
+Unique: (`daily_report_id`, `stage`, `denomination`).
+
+## `transactions`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | bigint | PK, the transaction number on receipts |
+| `user_id` | FK → `users` | Recording teller |
+| `customer_id` | FK → `customers` | |
+| `daily_report_id` | FK → `daily_reports` | Shift |
+| `type` | enum `deposit`, `withdrawal`, `deposit_correction`, `withdrawal_correction` | `CHECK` on the type list |
+| `amount` | integer unsigned | `CHECK (amount > 0)` |
+| `balance_before`, `balance_after` | integer unsigned | |
+| `corrects_transaction_id` | FK → `transactions`, nullable, **unique** | One correction per transaction |
+| `authorized_by` | FK → `users`, nullable | Supervisor who authorized a correction |
+| `note` | string, nullable | Correction reason |
+| `idempotency_key` | string(100), nullable | **Unique with `user_id`** |
+
+Indexes: (`customer_id`, `created_at`), (`user_id`, `created_at`).
+
+```sql title="chk_transactions_correction"
+(type IN ('deposit', 'withdrawal') AND corrects_transaction_id IS NULL AND authorized_by IS NULL)
+OR (type IN ('deposit_correction', 'withdrawal_correction') AND corrects_transaction_id IS NOT NULL AND authorized_by IS NOT NULL)
+```
+
+## `accounting_journals`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `transaction_id` | FK → `transactions` | RESTRICT |
+| `account_code` | enum `101`, `201` | Indexed |
+| `position` | enum `debit`, `credit` | `CHECK position IN ('debit','credit')` |
+| `amount` | integer unsigned | `CHECK (amount > 0)` |
+
+Unique: (`transaction_id`, `position`): exactly one debit and one credit per
+transaction.
+
+## `cash_transfers`
+
+Cash moved from a teller's drawer to the vault, created when a report is approved.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `daily_report_id` | FK → `daily_reports`, **unique** | One transfer per report |
+| `amount` | integer unsigned | `CHECK (amount > 0)` |
+| `approved_by` | FK → `users` | Supervisor |
+| `transferred_at` | timestamp | |
+
+`source` (`teller_drawer`) and `destination` (`main_vault`) in API responses are fixed
+values, not columns.
+
+## `settings`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `key` | string(50) | PK: `min_balance`, `qr_scanner_mode`, `withdrawal_verification` |
+| `value` | string | |
+| `updated_by` | FK → `users`, nullable | Admin who last changed it |
+
+## `withdrawal_authorizations`
+
+Withdrawal requests approved by the customer in the app (Mode A).
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | bigint | Internal PK, never exposed |
+| `public_id` | ULID, unique | The `{id}` in URLs and responses |
+| `teller_id`, `customer_id`, `daily_report_id` | FK | RESTRICT |
+| `amount` | integer unsigned | `CHECK (amount > 0)` |
+| `status` | enum `pending`, `approved`, `rejected`, `cancelled`, `expired`, `consumed` | Default `pending` |
+| `expires_at` | timestamp | Customer's decision deadline |
+| `approved_at`, `approval_expires_at` | timestamp, nullable | Teller's completion deadline |
+| `rejected_at`, `cancelled_at` | timestamp, nullable | |
+| `cancel_reason` | string(20), nullable | `teller` or `shift_closed` |
+| `consumed_at` | timestamp, nullable | |
+| `transaction_id` | FK → `transactions`, nullable, **unique** | One transaction per request |
+
+Indexes: (`customer_id`, `status`), (`teller_id`, `status`). **There is no PIN
+column.**
+
+```sql title="chk_wa_consumed and chk_wa_approved"
+-- a consumed request always points at its withdrawal; no other status does
+(status = 'consumed' AND transaction_id IS NOT NULL AND consumed_at IS NOT NULL)
+OR (status <> 'consumed' AND transaction_id IS NULL)
+
+-- approved and consumed requests always have the approval times
+status NOT IN ('approved', 'consumed') OR (approved_at IS NOT NULL AND approval_expires_at IS NOT NULL)
+```
+
+## `personal_access_tokens`
+
+Sanctum tokens: `tokenable` (morph to `users` or `customers`), `name` (`staff-portal` or
+`customer-portal`), `token` (hash, unique), `abilities` (not used), `last_used_at`,
+`expires_at`.
+
+<Aside type="caution" title="Old databases must be rebuilt">
+Earlier migrations were edited during development. A database created before those
+edits must be rebuilt with `php artisan migrate:fresh --seed` (which deletes its data).
+</Aside>

@@ -1,0 +1,62 @@
+---
+title: Penanganan error
+description: Hierarki exception aturan bisnis, cara Laravel merender error API, dan jaminan rollback saat terjadi kegagalan.
+sidebar:
+  order: 3
+sources:
+  - app/Exceptions
+  - bootstrap/app.php
+  - app/Services/TransactionService.php
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Format error yang diterima klien dijelaskan di [API · Error](/api/errors/). Halaman ini
+menjelaskan dari mana error itu berasal di backend.
+
+## Exception aturan bisnis
+
+Semua penolakan aturan bisnis adalah turunan `App\Exceptions\BankingException`
+(turunan `DomainException`). Method `render()` bawaannya mengembalikan `422` dengan
+`message`, sehingga klien selalu mendapat satu bentuk error.
+
+| Exception | Kapan dilempar | Field tambahan |
+| --- | --- | --- |
+| `ShiftNotOpenException` | Teller tidak punya shift tempat transaksi (atau penutupan) dapat dicatat | — |
+| `AccountNotActiveException` | Rekening tidak dapat bertransaksi (misalnya ditangguhkan) | — |
+| `InsufficientBalanceException` | Penarikan melanggar saldo minimum, atau koreksi setoran membuat saldo negatif | — |
+| `InvalidPinException` | PIN salah atau sedang diblokir | `remaining_attempts`, `pin_locked_until` |
+| `CashMismatchException` | Uang fisik saat penutupan berbeda dari saldo sistem | `system_balance`, `physical_balance`, `difference` |
+| `CorrectionNotAllowedException` | Koreksi ditolak (shift salah, sudah dikoreksi, …) | — |
+| `IdempotencyConflictException` | `Idempotency-Key` dipakai ulang untuk transaksi lain | — |
+| `InvalidStatusTransitionException` | Langkah alur persetujuan dari status yang salah (misalnya menyetujui laporan yang sudah disetujui) | — |
+| `AuthorizationNotUsableException` | Permintaan penarikan tidak dapat dipakai untuk langkah yang diminta (sudah disetujui, ditolak, dibatalkan, kedaluwarsa, selesai, shift lain, …) | `status`, hanya jika pesan menyangkut permintaan tertentu |
+| `WithdrawalVerificationModeException` | Cara verifikasi penarikan yang diminta dimatikan oleh pengaturan `withdrawal_verification` | — |
+
+## Konfigurasi di `bootstrap/app.php`
+
+- `shouldRenderJsonWhen(fn ($request) => $request->is('api/*'))`: semua error di bawah
+  `/api` dirender sebagai JSON, termasuk `401` untuk tamu (tidak ada redirect ke halaman
+  login).
+- `NotFoundHttpException` yang berasal dari `ModelNotFoundException` di `api/*`
+  dirender sebagai `404 { "message": "Data tidak ditemukan." }`.
+
+Error lain memakai perilaku bawaan Laravel: `ValidationException` → `422` dengan
+`errors`, `ThrottleRequestsException` → `429`, dan `AuthenticationException` → `401`.
+
+## Rollback
+
+Setiap operasi uang berjalan dalam `DB::transaction()`. Exception apa pun di dalamnya,
+termasuk `BankingException` dan error tak terduga (`500`), membatalkan seluruh perubahan:
+saldo, transaksi, jurnal, dan perubahan status otorisasi.
+
+<Aside type="caution" title="Pengecualian yang disengaja: percobaan PIN">
+`PinService::verify()` berjalan dalam transaksi database sendiri dan dipanggil
+**sebelum** transaksi utama, sehingga percobaan PIN yang salah tetap tersimpan walaupun
+permintaannya gagal. Tanpa ini, penghitung blokir PIN tidak akan pernah bertambah.
+</Aside>
+
+## Error di lingkungan pengembangan
+
+Dengan `APP_DEBUG=true`, body respons `500` memuat stack trace. Klien tidak boleh
+menampilkannya mentah-mentah. Set `APP_DEBUG=false` di luar pengembangan.

@@ -1,0 +1,132 @@
+---
+title: Audit & reports
+description: Endpoints for the transaction log, the accounting journal, the trial balance, and every PDF export for admins and supervisors.
+sidebar:
+  order: 7
+sources:
+  - routes/api.php
+  - app/Http/Controllers/API/Audit
+  - app/Http/Controllers/API/ReportController.php
+  - app/Services/ReportService.php
+  - app/Services/PdfReportService.php
+  - docs/API.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Endpoint from '../../../../components/Endpoint.astro';
+
+Read-only, for **admins** and **supervisors**. No endpoint writes transactions or
+journal lines. Concepts: [Audit trail and journal](/en/concepts/audit-trail/).
+
+## Shared filters
+
+Used by the lists and exports under `/api/audit/*`.
+
+| Query | Description |
+| --- | --- |
+| `from`, `to` | `YYYY-MM-DD` (whole day) or `YYYY-MM-DD HH:MM` (exact); `to` ≥ `from` |
+| `teller` | Teller name or username (contains) |
+| `customer` | Customer name, account number or NIS (contains) |
+| `type` | Transaction type |
+| `teller_id`, `customer_id` | Exact ids |
+
+## Transactions
+
+<Endpoint method="GET" path="/api/audit/transactions" roles="admin,supervisor" />
+
+The transaction log, newest first (default `per_page` 15), with `customer`, `teller`,
+`authorized_by` and `corrected_by`.
+
+<Endpoint method="GET" path="/api/audit/transactions/{transaction}" roles="admin,supervisor" />
+
+The detail adds `journals` and, for a withdrawal approved in the app,
+`withdrawal_authorization` (`{ "id": "01M6...", "method": "mobile", "approved_at": "..." }`;
+absent for PIN-at-the-counter withdrawals).
+
+```json title="200 — example from the demo database (shortened)"
+{
+  "data": {
+    "id": 6, "type": "deposit", "type_label": "Setor tunai", "amount": 70000,
+    "balance_before": 1000000, "balance_after": 1070000, "daily_report_id": 2,
+    "corrected_by": { "id": 7, "type": "deposit_correction", "created_at": "2026-10-27T13:10:38.000000Z" },
+    "customer": { "id": 3, "account_number": "RPL-2026-002", "full_name": "Citra Lestari" },
+    "teller": { "id": 3, "full_name": "Teller Loket 1" },
+    "journals": [
+      { "id": 12, "transaction_id": 6, "account_code": "201", "account_name": "Tabungan Nasabah", "position": "credit", "amount": 70000, "created_at": "..." },
+      { "id": 11, "transaction_id": 6, "account_code": "101", "account_name": "Kas", "position": "debit", "amount": 70000, "created_at": "..." }
+    ],
+    "...": "other Transaction fields"
+  }
+}
+```
+
+<Endpoint method="GET" path="/api/audit/transactions/export" roles="admin,supervisor" />
+
+Audit trail PDF (`jejak-audit-transaksi.pdf`) with balances before/after and correction
+references. Same filters as the list.
+
+## Journal
+
+<Endpoint method="GET" path="/api/audit/journals" roles="admin,supervisor" />
+
+Journal lines, newest first (default `per_page` 30), with the transaction's teller and
+customer. Extra filters: `transaction_id`, `account_code`, `position`.
+
+```json title="200 — example from the demo database (shortened)"
+{
+  "data": [
+    {
+      "id": 16, "transaction_id": 8, "account_code": "201", "account_name": "Tabungan Nasabah",
+      "position": "credit", "amount": 7000, "created_at": "2026-10-27T13:10:38.000000Z",
+      "transaction": {
+        "id": 8, "type": "deposit", "customer_id": 3, "user_id": 3,
+        "customer": { "account_number": "RPL-2026-002", "full_name": "Citra Lestari" },
+        "teller": { "full_name": "Teller Loket 1" }
+      }
+    }
+  ]
+}
+```
+
+<Endpoint method="GET" path="/api/audit/journals/summary" roles="admin,supervisor" />
+
+Trial balance per account with the same filters. Double entry guarantees `is_balanced`.
+
+```json title="200 — example from the demo database"
+{
+  "data": {
+    "accounts": [
+      { "account_code": "101", "account_name": "Kas", "total_debit": 2452000, "total_credit": 100000 },
+      { "account_code": "201", "account_name": "Tabungan Nasabah", "total_debit": 100000, "total_credit": 2452000 }
+    ],
+    "total_debit": 2552000, "total_credit": 2552000, "is_balanced": true
+  }
+}
+```
+
+<Endpoint method="GET" path="/api/audit/journals/export" roles="admin,supervisor" />
+
+Financial report PDF (`jurnal-akuntansi.pdf`): totals per account, balance check, every
+journal line with teller, customer and account number. Same filters as
+`/api/audit/journals`.
+
+## Other reports
+
+<Endpoint method="GET" path="/api/customers/{customer}/statement" roles="admin,supervisor" />
+
+Any customer's savings card as a PDF (`mutasi-RPL-2026-001.pdf`), with `?from=&to=`:
+opening balance, every line with a running balance, and totals. Also available for
+closed accounts.
+
+<Endpoint method="GET" path="/api/reports/annual" roles="admin,supervisor" />
+
+Annual report PDF (`laporan-tahunan-2026-2027.pdf`) for one school year
+(`?school_year=2026`, July–June, default the current one): balances per product and per
+account (opening, deposits, withdrawals, closing; net of corrections). **422** for an
+invalid year.
+
+<Aside type="note" title="About exports">
+Every export is a PDF (asked for in the UKK interview: readable and printable, not CSV).
+List exports print at most 5,000 rows and say so when truncated. The annual report has
+no JSON version (L10).
+</Aside>

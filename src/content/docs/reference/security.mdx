@@ -1,0 +1,91 @@
+---
+title: Pertimbangan keamanan
+description: Perlindungan yang sudah diterapkan backend (autentikasi, otorisasi, PIN, integritas data) dan hal yang harus diatur saat deployment.
+sidebar:
+  order: 4
+sources:
+  - docs/PIN_VERIFICATION.md
+  - docs/AUTH.md
+  - docs/RBAC.md
+  - docs/BACKEND_CHECKPOINT.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Autentikasi
+
+| Perlindungan | Penerapan |
+| --- | --- |
+| Password staf dan PIN nasabah | Hash bcrypt (`BCRYPT_ROUNDS=12`), tidak pernah muncul di respons |
+| Token API | Token Sanctum disimpan ter-hash; token mentah hanya dikembalikan sekali saat login |
+| Masa berlaku | 8 jam sejak dibuat, absolut, tanpa refresh |
+| Pencabutan | Logout mencabut token yang dipakai; memblokir/menghapus staf dan menutup rekening mencabut semua tokennya |
+| Pembatasan login | 5 percobaan per menit per username/identifier + IP |
+| Pesan login | Nasabah: pesan umum untuk identifier atau PIN yang salah; sisa percobaan tidak ditampilkan |
+| Tanpa cookie | Tidak ada session atau cookie di API, sehingga CSRF tidak berlaku |
+
+## Otorisasi
+
+| Perlindungan | Penerapan |
+| --- | --- |
+| Setiap route kecuali login butuh token dan middleware aktor | Diuji di `tests/Feature/RoleAccessTest.php` |
+| Peran diperiksa sebelum data dicari | Peran yang salah selalu `403`, tidak dapat menebak id |
+| Data milik orang lain | `404`, seolah-olah tidak ada |
+| Pemilik token dibaca ulang setiap permintaan | Pemblokiran dan perubahan peran langsung berlaku |
+| Akun administrator | Tidak dapat diubah lewat API |
+| Koreksi | Butuh kredensial supervisor aktif; supervisor dicatat di `authorized_by` |
+
+## PIN dan otorisasi penarikan
+
+| Kebutuhan | Cara dipenuhi |
+| --- | --- |
+| Nasabah tidak dapat memulai penarikan | Hanya route teller (`staff:teller`) yang membuat permintaan atau transaksi; route nasabah hanya daftar, setuju, tolak |
+| Staf tidak dapat memakai fungsi PIN nasabah | Setuju/tolak berada di balik middleware `customer`; token staf mendapat `403` (diuji untuk ketiga peran) |
+| PIN tidak pernah disimpan dalam teks biasa | Hanya hash bcrypt; tabel otorisasi tidak punya kolom PIN |
+| PIN tidak pernah di respons atau log | Tidak ada resource yang memuat `pin`; error validasi tidak mengulang nilai; tidak ada logging permintaan (diuji: tidak ada respons yang memuat `"pin` atau nilai PIN) |
+| PIN tidak dikirim ke klien teller (Mode A) | PIN hanya dikirim dari HP nasabah ke `approve` |
+| Brute force | Blokir bersama 3 kali / 15 menit di login, persetujuan, penarikan, dan ganti PIN, tersimpan walaupun permintaan gagal; ditambah rate limit |
+| Menyetujui penarikan yang berbeda | Nasabah melihat nominal, nama teller, dan saldo setelahnya sebelum menyetujui; penyelesaian memakai rekening dan nominal yang tersimpan di permintaan |
+| Replay / pemakaian ulang | Satu permintaan → paling banyak satu transaksi (penjaga status, row lock, `transaction_id` unik); `complete` yang diulang mengembalikan transaksi yang sama |
+| Persetujuan basi | 120 detik untuk menyetujui, 120 detik untuk menyelesaikan; permintaan ikut batal saat shift ditutup |
+| Akses lintas teller / nasabah | Pemeriksaan kepemilikan menjawab `404`; id berupa ULID |
+
+## Integritas data
+
+- Perubahan uang atomik dengan row lock berurutan tetap.
+- Transaksi, jurnal, laporan yang disetujui, pemindahan kas, dan otorisasi yang selesai
+  tidak dapat diubah atau dihapus (tidak ada endpoint, penjaga model, `ON DELETE RESTRICT`).
+- Constraint `CHECK` di database untuk nominal, saldo, posisi jurnal, keterkaitan
+  koreksi, dan status otorisasi.
+- `Idempotency-Key` mencegah pencatatan ganda saat permintaan diulang.
+
+## Risiko yang tersisa
+
+| # | Risiko | Mitigasi yang disarankan |
+| --- | --- | --- |
+| L2 | Di Mode B (PIN di loket), PIN melewati klien teller dan dihitung sebelum pemeriksaan lain | Biarkan Mode B mati kecuali dibutuhkan; periksa status sebelum meminta PIN |
+| L17 | Payload QR adalah nomor rekening biasa (tidak ditandatangani) | QR hanya mengidentifikasi; penarikan tetap butuh PIN |
+| L20 | Token nasabah tanpa ability: perangkat mana pun tempat nasabah login dapat menyetujui | Opsional: biometrik perangkat sebelum menampilkan PIN pad |
+| L19 | Polling saja | Nasabah harus membuka aplikasi untuk melihat permintaan |
+
+## Harus diatur saat deployment
+
+<Aside type="danger" title="Sebelum dipakai di luar lingkungan ujian">
+- Ganti semua password dan PIN demo dari seeder.
+- Set `APP_DEBUG=false` agar respons `500` tidak memuat stack trace.
+- Sajikan API lewat **HTTPS**; repositori tidak mengaturnya.
+- Batasi origin CORS untuk produksi (saat ini semua origin diizinkan; mengubahnya
+  berarti menambah `config/cors.php` di backend).
+- Tinjau dependensi: `composer audit` melaporkan 12 advisory pada paket yang lebih lama
+  dari pekerjaan ini (`laravel/framework` 13.24.0, `league/commonmark`,
+  `league/flysystem`, `symfony/http-foundation`, `symfony/yaml`), menurut
+  `docs/BACKEND_CHECKPOINT.md`.
+</Aside>
+
+## Rekomendasi untuk klien
+
+- **Web staf:** simpan token di `sessionStorage`; hindari skrip pihak ketiga dan jangan
+  merender HTML yang tidak tepercaya; logout di akhir shift di komputer loket bersama.
+- **Expo:** simpan token dengan `expo-secure-store`; jangan pernah menyimpan PIN; pakai
+  keypad angka yang disamarkan untuk PIN.
+- Jangan pernah menganggap halaman yang disembunyikan sebagai halaman yang terlindungi.

@@ -1,0 +1,86 @@
+---
+title: Errors
+description: The error response format, what each status code means, extra fields on business errors, and how clients should handle them.
+sidebar:
+  order: 9
+sources:
+  - bootstrap/app.php
+  - app/Exceptions
+  - docs/API.md
+  - docs/FRONTEND_HANDOFF.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Every error has a `message`. Validation errors also have `errors` keyed by field. Some
+business errors add other fields.
+
+## Status codes
+
+| Status | When | Example body | Client action |
+| --- | --- | --- | --- |
+| `401` | Missing, invalid or expired token | `{ "message": "Unauthenticated." }` | Delete the token, go to login |
+| `403` | Wrong actor or role, blocked account or closed account | `{ "message": "Peran Anda tidak memiliki akses ke fitur ini." }` | Log out and return to login (UKK rubric 3.2), except the admin account case below |
+| `404` | Record does not exist or belongs to someone else | `{ "message": "Data tidak ditemukan." }` | Show "not found" |
+| `405` | Method not allowed (e.g. writing to the journal) | `{ "message": "The DELETE method is not supported for route ..." }` | Programming error |
+| `409` | Staff delete refused because of history | `{ "message": "Staf ini memiliki riwayat transaksi, ... Blokir akunnya saja." }` | Offer "Block" |
+| `422` + `errors` | Field validation failed | `{ "message": "...", "errors": { "amount": ["The amount field must be at least 1."] } }` | Show messages next to the fields |
+| `422` without `errors` | A business rule refused the request | `{ "message": "Saldo tidak mencukupi. ..." }` | Show the message clearly; nothing was saved |
+| `429` | Too many login, correction or withdrawal-authorization requests | `{ "message": "Too Many Attempts." }` | "Too many attempts, wait a moment" |
+| `500` | Unexpected server error; any money operation is fully rolled back | `{ "message": "Server Error" }` | Generic message. Never show a raw stack trace |
+
+<Aside type="note" title="A 403 that is not a reason to log out">
+`Akun administrator tidak dapat diubah melalui API.` when editing, blocking or deleting
+staff is a normal business error. Show the message without logging out.
+</Aside>
+
+## 403 messages
+
+| Message | Meaning |
+| --- | --- |
+| `Fitur ini khusus untuk staf bank.` | Customer token on a staff URL |
+| `Fitur ini khusus untuk nasabah.` | Staff token on a customer URL |
+| `Peran Anda tidak memiliki akses ke fitur ini.` | Wrong staff role |
+| `Akun staf ini sudah dinonaktifkan.` | Staff member blocked |
+| `Rekening ini sudah tidak aktif.` | Customer account closed |
+
+The role check runs before the record is looked up, so a wrong role always gets `403`,
+never `404`.
+
+## Business errors with extra fields
+
+| Case | Extra fields |
+| --- | --- |
+| Physical cash mismatch when closing a shift | `system_balance`, `physical_balance`, `difference` |
+| Wrong or locked PIN (approval, counter withdrawal, PIN change) | `remaining_attempts`, `pin_locked_until` (UTC ISO or null) |
+| Withdrawal request not usable in its current status | `status` (e.g. `expired`, `cancelled`, `consumed`) |
+
+```json title="Example: wrong PIN"
+{ "message": "PIN salah. Sisa percobaan: 2.", "remaining_attempts": 2, "pin_locked_until": null }
+```
+
+## How the backend produces errors
+
+| Source | Status | Notes |
+| --- | --- | --- |
+| `auth:sanctum` middleware | `401` | API routes never redirect; guests always get JSON |
+| `staff` / `customer` middleware | `403` | See [Roles and permissions](/en/concepts/roles-and-permissions/#middleware) |
+| Route model binding finds nothing | `404` | `bootstrap/app.php` turns `ModelNotFoundException` under `api/*` into `Data tidak ditemukan.` |
+| Form requests | `422` + `errors` | Laravel's default (English) validation messages |
+| `App\Exceptions\BankingException` and subclasses | `422` | Business rules; Indonesian messages. See [Error handling](/en/reference/error-handling/) |
+| Rate limiters | `429` | |
+
+Every error under `api/*` is rendered as JSON (`shouldRenderJsonWhen`), even without an
+`Accept` header, but send `Accept: application/json` anyway.
+
+## Message language
+
+Business messages are Indonesian; field validation messages are Laravel's English
+defaults (`"The amount field must be at least 1."`). Clients can map field messages to
+their own texts if they need one language (limitation L9).
+
+## Downloading PDFs
+
+PDF endpoints return `application/pdf` on success and JSON on failure (for example a
+daily report that is still locked). Request them as a blob, check `Content-Type`, and
+show the `message` when it is JSON.

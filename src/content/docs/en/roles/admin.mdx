@@ -1,0 +1,50 @@
+---
+title: Administrator
+description: What the administrator can and cannot do, with the endpoints they use.
+sidebar:
+  order: 1
+sources:
+  - docs/RBAC.md
+  - routes/api.php
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+**Role:** `admin` (`users` table). **Client:** staff web app. **Focus:** master data
+(staff and accounts), settings, and monitoring the journal.
+
+Administrator accounts are created by the seeder and **cannot** be created, edited,
+blocked or deleted through the API, including their passwords.
+
+## Can
+
+| Capability | Endpoints |
+| --- | --- |
+| Manage tellers and supervisors: create, edit, block, unblock, delete (if they have no history) | `POST /api/admin/staff`, `PUT\|PATCH`/`DELETE /api/admin/staff/{id}`, `…/block`, `…/unblock` |
+| Import staff from an `.xlsx`/`.csv` spreadsheet | `POST /api/admin/staff/import` |
+| List and view staff | `GET /api/staff`, `GET /api/staff/{id}` |
+| Open accounts, edit data, suspend, reset PINs | `POST /api/admin/customers`, `PUT\|PATCH /api/admin/customers/{id}` |
+| Close the accounts of graduating students | `POST /api/admin/customers/{id}/deactivate` |
+| Get customer card data (QR payload) | `GET /api/admin/customers/{id}/card` |
+| View accounts, including closed ones | `GET /api/customers`, `GET /api/customers/{id}` |
+| Change the minimum balance, QR scanner mode and withdrawal verification mode | `PUT\|PATCH /api/admin/settings` |
+| Read the audit log, journal and trial balance | `GET /api/audit/*` |
+| Download the journal, audit trail, statement and annual report PDFs | `…/export`, `GET /api/customers/{id}/statement`, `GET /api/reports/annual` |
+
+## Cannot
+
+- Record or correct transactions, run shifts, look up customers at the counter.
+- See or review tellers' daily reports; see the vault ledger.
+- Edit any administrator account, including their own.
+- Manage majors (read-only).
+- Approve a withdrawal on a customer's behalf or see a PIN.
+
+<Aside type="note" title="Note I1 · Admins and the transaction log">
+The UKK RBAC matrix gives the admin no access to "input transaksi" and read access to
+the journal. The backend also lets admins **read** the transaction log
+(`/api/audit/transactions*`). Reading is not input, but a strict reading of the matrix
+could disagree. Recorded as inconsistency I1.
+</Aside>
+
+Related: [Account and staff management](/en/workflows/account-management/) ·
+[Admin API](/en/api/admin/) · [Full matrix](/en/concepts/roles-and-permissions/#capability-matrix)

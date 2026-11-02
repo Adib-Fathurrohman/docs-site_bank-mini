@@ -1,0 +1,61 @@
+---
+title: Error handling
+description: The business-rule exception hierarchy, how Laravel renders API errors, and the rollback guarantee on failure.
+sidebar:
+  order: 3
+sources:
+  - app/Exceptions
+  - bootstrap/app.php
+  - app/Services/TransactionService.php
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The error format clients receive is described in [API · Errors](/en/api/errors/). This
+page explains where those errors come from in the backend.
+
+## Business-rule exceptions
+
+Every business-rule refusal is a subclass of `App\Exceptions\BankingException` (itself
+a `DomainException`). Its default `render()` returns `422` with `message`, so clients
+always get one error shape.
+
+| Exception | Thrown when | Extra fields |
+| --- | --- | --- |
+| `ShiftNotOpenException` | The teller has no shift in which a transaction (or closing) can be recorded | — |
+| `AccountNotActiveException` | The account cannot transact (e.g. suspended) | — |
+| `InsufficientBalanceException` | A withdrawal breaks the minimum balance, or a deposit correction would make the balance negative | — |
+| `InvalidPinException` | The PIN is wrong or currently locked | `remaining_attempts`, `pin_locked_until` |
+| `CashMismatchException` | The physical cash at closing differs from the system balance | `system_balance`, `physical_balance`, `difference` |
+| `CorrectionNotAllowedException` | A correction is refused (wrong shift, already corrected, …) | — |
+| `IdempotencyConflictException` | An `Idempotency-Key` is reused for a different transaction | — |
+| `InvalidStatusTransitionException` | An approval workflow step is attempted from the wrong status (e.g. approving an approved report) | — |
+| `AuthorizationNotUsableException` | A withdrawal request cannot be used for the requested step (already approved, rejected, cancelled, expired, consumed, other shift, …) | `status`, only when the message is about a specific request |
+| `WithdrawalVerificationModeException` | The requested way of verifying a withdrawal is switched off by the `withdrawal_verification` setting | — |
+
+## Configuration in `bootstrap/app.php`
+
+- `shouldRenderJsonWhen(fn ($request) => $request->is('api/*'))`: every error under
+  `/api` is rendered as JSON, including `401` for guests (no redirect to a login page).
+- A `NotFoundHttpException` caused by a `ModelNotFoundException` under `api/*` is
+  rendered as `404 { "message": "Data tidak ditemukan." }`.
+
+Other errors use Laravel's defaults: `ValidationException` → `422` with `errors`,
+`ThrottleRequestsException` → `429`, and `AuthenticationException` → `401`.
+
+## Rollback
+
+Every money operation runs in `DB::transaction()`. Any exception inside it, including a
+`BankingException` and unexpected errors (`500`), rolls back every change: balance,
+transaction, journal and authorization status changes.
+
+<Aside type="caution" title="The intended exception: PIN attempts">
+`PinService::verify()` runs in its own database transaction and is called **before**
+the main transaction, so a wrong PIN attempt is saved even though the request fails.
+Without this, the PIN lock counter would never increase.
+</Aside>
+
+## Errors in development
+
+With `APP_DEBUG=true`, `500` response bodies contain a stack trace. Clients must never
+show it raw. Set `APP_DEBUG=false` outside development.

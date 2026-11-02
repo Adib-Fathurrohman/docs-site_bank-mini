@@ -1,0 +1,56 @@
+---
+title: Status aplikasi klien
+description: Status aplikasi web staf dan aplikasi mobile nasabah, serta rencana dokumentasinya.
+status: coming-soon
+sidebar:
+  order: 1
+  label: Status
+  badge:
+    text: Segera
+    variant: caution
+sources:
+  - docs/FRONTEND_HANDOFF.md
+  - bank_mini/front-end/README.md
+---
+
+import { Aside, Badge } from '@astrojs/starlight/components';
+
+Dokumentasi aplikasi klien **ditunda** sampai aplikasinya selesai. Halaman ini hanya
+mencatat status yang dapat diverifikasi dan apa yang akan ditambahkan nanti. Tidak ada
+tata letak, layar, atau interaksi yang dijelaskan di sini, karena belum final.
+
+## Status
+
+| Aplikasi | Pengguna | Status | Keterangan |
+| --- | --- | --- | --- |
+| Aplikasi web staf (React) | Admin, Supervisor, Teller | <Badge text="Dalam pengembangan" variant="caution" /> | Repositori terpisah (`bank_mini/front-end`). Vite, React 19, TypeScript, React Router, TanStack Query, Tailwind CSS 4, Vitest |
+| Aplikasi mobile nasabah (React Native + Expo) | Nasabah | <Badge text="Belum dimulai" variant="note" /> | Belum ada repositori |
+
+<Aside type="caution" title="Jangan berasumsi">
+Backend menyediakan 67 endpoint, tetapi itu **tidak berarti** setiap endpoint sudah
+dipakai oleh aplikasi klien. Status per fitur akan dicatat saat dokumentasi klien
+ditulis.
+</Aside>
+
+## Yang dapat dipakai pengembang klien sekarang
+
+- [Login dan sesi](/workflows/authentication/): alur login, token, dan penanganan
+  `401`/`403`.
+- [Peran dan hak akses](/concepts/roles-and-permissions/): matriks untuk route guard.
+- [Referensi API](/api/) dan [Error](/api/errors/).
+- [Persetujuan PIN di aplikasi](/workflows/withdrawal-pin-authorization/): kontrak
+  polling antara klien teller dan aplikasi nasabah.
+- Di repositori backend: `docs/FRONTEND_HANDOFF.md` dan `docs/UI_REQUIREMENTS.md`
+  (kebutuhan fungsional per peran yang didukung API; bukan desain antarmuka).
+
+## Rencana dokumentasi
+
+Bagian ini akan berisi dua subbagian. Halaman baru cukup ditambahkan sebagai file MDX di
+folder yang sesuai; sidebar membuatnya otomatis.
+
+| Folder | Topik yang direncanakan |
+| --- | --- |
+| `clients/web/` | Menjalankan aplikasi web, konfigurasi (`VITE_API_BASE_URL`), struktur proyek, autentikasi dan penyimpanan sesi, panduan per peran |
+| `clients/mobile/` | Menjalankan aplikasi Expo, konfigurasi (`EXPO_PUBLIC_API_BASE_URL`), penyimpanan token aman, layar persetujuan penarikan, panduan nasabah |
+
+Topik di atas adalah rencana, bukan fitur yang sudah ada.

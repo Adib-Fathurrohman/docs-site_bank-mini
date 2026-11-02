@@ -1,0 +1,113 @@
+---
+title: Manajemen rekening dan staf
+description: Alur administrator untuk membuka, mengubah, menangguhkan, dan menutup rekening nasabah, serta mengelola akun teller dan supervisor.
+sidebar:
+  order: 2
+sources:
+  - app/Http/Controllers/API/Admin/CustomerController.php
+  - app/Http/Controllers/API/Admin/StaffController.php
+  - app/Services/CustomerService.php
+  - app/Services/StaffImportService.php
+  - docs/WORKFLOWS.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Mermaid from '../../../components/Mermaid.astro';
+
+Semua alur di halaman ini hanya dapat dijalankan **administrator**. Supervisor dapat
+membaca daftar rekening dan staf, tetapi tidak dapat mengubahnya.
+
+## Siklus hidup rekening nasabah
+
+<Mermaid
+	caption="Status rekening. Rekening yang ditutup tidak dapat dipulihkan lewat API."
+	chart={`stateDiagram-v2
+  direction LR
+  [*] --> active: admin membuka rekening (saldo 0)
+  active --> suspended: admin menangguhkan
+  suspended --> active: admin mengaktifkan
+  active --> inactive: admin menutup (lulus)
+  suspended --> inactive: admin menutup (lulus)
+  inactive --> [*]
+  note right of inactive
+    soft delete · token dicabut
+    riwayat tetap utuh
+  end note`}
+/>
+
+### Membuka rekening
+
+| | |
+| --- | --- |
+| Endpoint | `POST /api/admin/customers` |
+| Prasyarat | Jurusan ada (`GET /api/majors`) |
+| Input | `nis`, `full_name`, `class` (`X`/`XI`/`XII`), `major_id`, `group` (`1`–`4`), `pin` (6 digit) |
+| Proses | `CustomerService::create` membuat nomor `{KODE}-{TAHUN}-{URUT}` (coba ulang hingga 3 kali jika bentrok) |
+| Efek database | Baris `customers`: status `active`, saldo `0`, PIN di-hash |
+| Respons | `201` Customer |
+| Gagal | `422` validasi (NIS sudah dipakai, termasuk rekening yang ditutup); `403` bukan admin |
+
+Saldo awal selalu `0`. Uang hanya masuk lewat teller. Field `account_number`,
+`account_status`, dan `balance` di body diabaikan.
+
+### Mengubah, menangguhkan, me-reset PIN
+
+| | |
+| --- | --- |
+| Endpoint | `PUT\|PATCH /api/admin/customers/{id}` |
+| Input | Sebagian dari `nis`, `full_name`, `class`, `major_id`, `group`, `account_status` (`active`/`suspended` saja), `pin` |
+| Efek | Jika `pin` dikirim, `pin_failed_attempts` dan `pin_locked_until` juga di-reset (blokir PIN terbuka) |
+| Tidak dapat diubah | Nomor rekening dan saldo. Mengganti jurusan tidak mengganti nomor |
+| Gagal | `422` (misalnya `account_status: inactive`); `404` rekening sudah ditutup |
+
+Menangguhkan rekening tidak mencabut token nasabah.
+
+### Menutup rekening (lulus)
+
+| | |
+| --- | --- |
+| Endpoint | `POST /api/admin/customers/{id}/deactivate` |
+| Proses | Satu transaksi database: status `inactive`, hapus semua token nasabah, soft delete |
+| Validasi | Tidak ada pemeriksaan saldo |
+| Efek | `deleted_at` terisi. Transaksi dan jurnal tidak berubah |
+| Gagal | `404` jika sudah ditutup |
+
+<Aside type="caution" title="Bayarkan saldo dulu">
+Penutupan tidak mensyaratkan saldo nol dan tidak dapat dibatalkan. Sisa saldo harus
+ditarik lewat teller **sebelum** rekening ditutup, dan aturan saldo minimum tetap
+berlaku (keterbatasan L5).
+</Aside>
+
+Rekening yang ditutup tetap dapat dibaca lewat `GET /api/customers?trashed=with|only`,
+`GET /api/customers/{id}`, PDF mutasi, dan log audit.
+
+### Data kartu nasabah
+
+`GET /api/admin/customers/{id}/card` mengembalikan data untuk mencetak kartu, termasuk
+`qr_payload` (`BANKMINI:{account_number}`). Backend tidak membuat gambar QR; klien
+yang merender payload menjadi QR.
+
+## Manajemen staf
+
+| Alur | Endpoint | Efek database | Kegagalan penting |
+| --- | --- | --- | --- |
+| Membuat teller/supervisor | `POST /api/admin/staff` | Baris `users` (password di-hash, `is_active` true) | `422` (peran `admin` ditolak, username sudah dipakai) |
+| Mengubah staf | `PUT\|PATCH /api/admin/staff/{id}` | Update `users` (termasuk password, peran teller↔supervisor) | `403` untuk akun admin |
+| Memblokir | `POST /api/admin/staff/{id}/block` | `is_active` false, semua token dihapus | `403` untuk akun admin |
+| Membuka blokir | `POST /api/admin/staff/{id}/unblock` | `is_active` true | `403` untuk akun admin |
+| Menghapus | `DELETE /api/admin/staff/{id}` | Baris dan token dihapus jika tidak dirujuk data lain | `409` jika ada transaksi, laporan, persetujuan, atau perubahan pengaturan yang merujuknya |
+| Impor | `POST /api/admin/staff/import` (multipart `file`) | Semua baris dimasukkan dalam satu transaksi database; password yang kosong dibuat acak dan dikembalikan sekali | `422` dengan kunci `rows.{i}.{field}`; tidak ada yang dimasukkan |
+
+<Aside type="note" title="Blokir, bukan hapus">
+Staf yang pernah bertransaksi tidak dapat dihapus karena riwayatnya harus tetap
+menunjuk ke akunnya (`ON DELETE RESTRICT`). Blokir akunnya.
+</Aside>
+
+## Yang belum tersedia
+
+- Memulihkan rekening yang sudah ditutup; penutupan dengan pembayaran otomatis.
+- Mengelola akun administrator lewat API (termasuk password admin).
+- Mengelola jurusan lewat API (hasil seeder, hanya baca).
+- Staf mengganti password sendiri.
+
+Endpoint lengkap: [API Admin](/api/admin/).

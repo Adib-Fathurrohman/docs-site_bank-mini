@@ -1,0 +1,176 @@
+---
+title: Instalasi dan menjalankan backend
+description: Kebutuhan sistem, instalasi backend Laravel, pembuatan database MariaDB, seeder, server, scheduler, akun demo, dan test.
+sidebar:
+  order: 2
+sources:
+  - README.md
+  - composer.json
+  - .env.example
+  - routes/console.php
+  - docs/BACKEND_CHECKPOINT.md
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Halaman ini menjelaskan cara menjalankan **backend** di komputer lokal. Aplikasi web
+dan mobile adalah proyek terpisah dan belum didokumentasikan di sini.
+
+## Kebutuhan sistem
+
+| Kebutuhan | Versi | Catatan |
+| --- | --- | --- |
+| PHP | `^8.3` | Sesuai `composer.json` |
+| Composer | 2.x | Untuk memasang dependensi PHP |
+| MariaDB | Tidak dikunci di repositori | Engine InnoDB (dipasang di `config/database.php`). Dibutuhkan untuk constraint `CHECK` dan row lock |
+| Git | — | Untuk mengambil kode |
+
+Dependensi utama dari `composer.json`:
+
+| Paket | Fungsi |
+| --- | --- |
+| `laravel/framework` `^13.8` | Framework (terpasang v13.24.0) |
+| `laravel/sanctum` `^4.0` | Token API (bearer) |
+| `barryvdh/laravel-dompdf` `^3.1` | Laporan dan struk PDF |
+| `openspout/openspout` `^5.13` | Impor staf dari spreadsheet `.xlsx`/`.csv` |
+
+## Instalasi
+
+<Steps>
+
+1. **Pasang dependensi dan buat file `.env`.**
+
+   ```bash
+   composer install
+   cp .env.example .env
+   php artisan key:generate
+   ```
+
+2. **Buat database dan user MariaDB.** Ganti password dengan milik Anda sendiri.
+
+   ```sql
+   CREATE DATABASE ukk_laravel;
+   CREATE USER 'bank-db-user'@'localhost' IDENTIFIED BY 'ganti-password';
+   GRANT ALL PRIVILEGES ON ukk_laravel.* TO 'bank-db-user'@'localhost';
+   ```
+
+3. **Arahkan `.env` ke MariaDB.**
+
+   ```dotenv
+   DB_CONNECTION=mariadb
+   DB_HOST=127.0.0.1
+   DB_PORT=3306
+   DB_DATABASE=ukk_laravel
+   DB_USERNAME=bank-db-user
+   DB_PASSWORD=ganti-password
+   ```
+
+   Variabel lain dijelaskan di [Konfigurasi](/getting-started/configuration/).
+
+4. **Jalankan migration dan seeder.**
+
+   ```bash
+   php artisan migrate:fresh --seed
+   ```
+
+   <Aside type="danger" title="migrate:fresh menghapus semua data">
+   Perintah ini menghapus seluruh tabel lalu membuatnya ulang. Jangan jalankan pada
+   database yang datanya ingin disimpan.
+   </Aside>
+
+5. **Jalankan server.**
+
+   ```bash
+   php artisan serve
+   ```
+
+   API tersedia di `http://localhost:8000/api`.
+
+</Steps>
+
+<Aside type="caution" title="`.env.example` memakai SQLite">
+Nilai bawaan `.env.example` adalah `DB_CONNECTION=sqlite`, sedangkan README
+menginstruksikan MariaDB. Pakai MariaDB seperti langkah 3 agar constraint `CHECK`
+dan row lock berjalan seperti di lingkungan ujian.
+</Aside>
+
+## Scheduler
+
+Scheduler tidak wajib, tetapi disarankan. Ia menjalankan dua tugas dari
+`routes/console.php`:
+
+| Tugas | Jadwal | Fungsi |
+| --- | --- | --- |
+| `sanctum:prune-expired --hours=24` | Harian | Menghapus baris token yang sudah kedaluwarsa |
+| `bank:expire-withdrawal-authorizations` | Setiap menit | Menandai permintaan penarikan yang terbengkalai sebagai `expired` |
+
+```bash
+php artisan schedule:work
+```
+
+Tanpa scheduler, API tetap benar karena status kedaluwarsa juga dihitung setiap kali
+data dibaca. Scheduler hanya membersihkan baris yang ditinggalkan.
+
+## Akses dari HP di jaringan yang sama
+
+HP tidak dapat menjangkau `localhost` milik laptop. Jalankan server di semua antarmuka
+jaringan lalu pakai IP laptop di jaringan lokal:
+
+```bash
+php artisan serve --host=0.0.0.0 --port=8000
+```
+
+| Klien | Base URL contoh |
+| --- | --- |
+| Browser di laptop yang sama | `http://localhost:8000/api` |
+| HP di Wi-Fi yang sama | `http://<IP-laptop>:8000/api` |
+| Emulator Android | `http://10.0.2.2:8000/api` |
+
+URL untuk produksi atau demo belum ditentukan; tetapkan di lingkungan deployment.
+
+## Akun demo
+
+Seeder membuat akun berikut. Saldo awal nasabah demo dibuat lewat transaksi setor
+sungguhan di shift teller tanggal kemarin yang sudah ditutup dan disetujui, sehingga
+saldo, mutasi, jurnal, dan brankas konsisten, dan teller bisa membuka shift baru hari
+ini.
+
+| Aktor | Login | Password / PIN |
+| --- | --- | --- |
+| Administrator | `admin` | `password` |
+| Supervisor | `supervisor` | `password` |
+| Teller | `teller` | `password` |
+| Nasabah | NIS `20260001`–`20260003` atau rekening `RPL-2026-001`, `DKV-2026-001`, `RPL-2026-002` | PIN `123456` |
+
+<Aside type="caution" title="Hanya untuk demo">
+Ganti semua password dan PIN demo sebelum dipakai di luar lingkungan ujian. Pengaturan
+`withdrawal_verification` hasil seeder adalah `mobile`, sehingga penarikan butuh
+persetujuan di aplikasi nasabah kecuali admin mengubahnya ke `terminal` atau `both`.
+</Aside>
+
+## Menjalankan test
+
+```bash
+php artisan test
+```
+
+Test memakai SQLite in-memory (lihat `phpunit.xml`). Untuk memastikan constraint
+`CHECK` dan row lock juga berjalan di MariaDB, jalankan test pada database terpisah.
+Jangan pakai `ukk_laravel`, karena isinya dihapus oleh setiap test.
+
+```bash
+mariadb -u bank-db-user -p -e "CREATE DATABASE IF NOT EXISTS test_bank_mini"
+DB_CONNECTION=mariadb DB_DATABASE=test_bank_mini php artisan test
+```
+
+Jika user database tidak punya izin membuat database tersebut, berikan dulu sebagai
+root: `GRANT ALL PRIVILEGES ON test_bank_mini.* TO 'bank-db-user'@'localhost';`
+
+## Masalah yang sering muncul
+
+| Gejala | Penyebab | Solusi |
+| --- | --- | --- |
+| `500` saat membuka shift, kolom `daily_reports.opening_balance` tidak ada | Database dibuat dari migration versi lama (migration diubah selama pengembangan) | `php artisan migrate:fresh --seed` (menghapus data) |
+| Tabel `withdrawal_authorizations` tidak ada | Migration terbaru belum dijalankan | `php artisan migrate` |
+| `composer update` gagal di skrip `boost:update` | Laravel Boost tercantum tetapi tidak pernah dipasang | Jalankan Composer dengan `--no-scripts` |
+| Respons `500` berisi stack trace | `APP_DEBUG=true` | Set `APP_DEBUG=false` di luar pengembangan |

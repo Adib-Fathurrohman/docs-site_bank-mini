@@ -1,0 +1,53 @@
+---
+title: Nasabah
+description: Apa yang dapat dan tidak dapat dilakukan nasabah (siswa), beserta endpoint yang dipakainya.
+sidebar:
+  order: 4
+sources:
+  - docs/RBAC.md
+  - docs/PIN_VERIFICATION.md
+  - routes/api.php
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+**Model:** `App\Models\Customer` (tabel `customers`, tanpa nilai `role`). **Klien:**
+aplikasi mobile nasabah. **Masuk dengan:** NIS atau nomor rekening + PIN 6 digit.
+
+Semua endpoint nasabah dibatasi ke rekening milik token. Parameter seperti
+`?customer_id=` diabaikan.
+
+## Dapat
+
+| Kemampuan | Endpoint |
+| --- | --- |
+| Melihat profil sendiri | `GET /api/customer/me` |
+| Melihat saldo beserta saldo minimum | `GET /api/customer/balance` |
+| Melihat mutasi dengan filter dan detail satu transaksi | `GET /api/customer/transactions`, `/{id}` |
+| Mengunduh PDF mutasi sendiri | `GET /api/customer/statement/export` |
+| Menampilkan kartu digital (payload QR) untuk dipindai teller | `GET /api/customer/card` |
+| Mengganti PIN | `POST /api/customer/pin` |
+| Melihat, menyetujui (dengan PIN), atau menolak permintaan penarikan untuk rekening sendiri | `/api/customer/withdrawal-authorizations…` |
+| Logout | `POST /api/customer/logout` |
+
+## Tidak dapat
+
+- **Memulai penarikan atau memindahkan uang** dalam bentuk apa pun. Nasabah hanya
+  menyetujui atau menolak penarikan yang dimulai teller.
+- Melihat nasabah lain, data staf, jurnal, atau laporan internal.
+- Memakai endpoint staf mana pun (`403`).
+
+| Status rekening | Login | Melihat data | Bertransaksi lewat teller |
+| --- | :-: | :-: | :-: |
+| `active` | ✓ | ✓ | ✓ |
+| `suspended` | ✓ | ✓ | — |
+| `inactive` (lulus) | — | — | — |
+
+<Aside type="caution" title="Blokir PIN bersama">
+Tiga PIN salah berturut-turut, di login, persetujuan penarikan, atau ganti PIN,
+memblokir PIN selama 15 menit di semua tempat. Lupa PIN tidak dapat dipulihkan sendiri;
+admin yang me-reset.
+</Aside>
+
+Terkait: [Persetujuan PIN](/workflows/withdrawal-pin-authorization/) ·
+[Verifikasi PIN](/concepts/pin-verification/) · [API Nasabah](/api/customer/)

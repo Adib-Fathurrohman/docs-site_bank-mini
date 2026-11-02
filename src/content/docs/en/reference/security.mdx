@@ -1,0 +1,91 @@
+---
+title: Security considerations
+description: The protections the backend already applies (authentication, authorization, PIN, data integrity) and what must be configured at deployment.
+sidebar:
+  order: 4
+sources:
+  - docs/PIN_VERIFICATION.md
+  - docs/AUTH.md
+  - docs/RBAC.md
+  - docs/BACKEND_CHECKPOINT.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Authentication
+
+| Protection | Implementation |
+| --- | --- |
+| Staff passwords and customer PINs | bcrypt hash (`BCRYPT_ROUNDS=12`), never in responses |
+| API tokens | Sanctum tokens stored hashed; the plain token is returned only once at login |
+| Lifetime | 8 hours from creation, absolute, no refresh |
+| Revocation | Logout revokes the token used; blocking/deleting staff and closing an account revoke all their tokens |
+| Login throttling | 5 attempts per minute per username/identifier + IP |
+| Login messages | Customers: a generic message for a wrong identifier or PIN; remaining attempts are not shown |
+| No cookies | No sessions or cookies in the API, so CSRF does not apply |
+
+## Authorization
+
+| Protection | Implementation |
+| --- | --- |
+| Every route except login needs a token and an actor middleware | Tested in `tests/Feature/RoleAccessTest.php` |
+| The role is checked before the record is looked up | A wrong role always gets `403`; ids cannot be probed |
+| Someone else's record | `404`, as if it did not exist |
+| The token owner is reloaded on every request | Blocking and role changes take effect immediately |
+| Administrator accounts | Cannot be changed through the API |
+| Corrections | Need an active supervisor's credentials; the supervisor is recorded in `authorized_by` |
+
+## PIN and withdrawal authorization
+
+| Requirement | How it is met |
+| --- | --- |
+| Customers cannot start a withdrawal | Only teller routes (`staff:teller`) create requests or transactions; customer routes can only list, approve or reject |
+| Staff cannot use the customer's PIN function | Approve/reject are behind the `customer` middleware; staff tokens get `403` (tested for all three roles) |
+| The PIN is never stored in plain text | bcrypt hash only; the authorization table has no PIN column |
+| The PIN is never in responses or logs | No resource includes `pin`; validation errors do not echo values; no request logging (tested: no response contains `"pin` or the PIN value) |
+| The PIN is never sent to teller clients (Mode A) | The PIN goes only from the customer's phone to `approve` |
+| Brute force | Shared 3-attempt / 15-minute lock across login, approval, withdrawal and PIN change, saved even when the request fails; plus rate limits |
+| Approving a different withdrawal | The customer sees the amount, the teller's name and the balance after before approving; completion uses the account and amount stored in the request |
+| Replay / reuse | One request → at most one transaction (status guard, row lock, unique `transaction_id`); repeated `complete` calls return the same transaction |
+| Stale approvals | 120 seconds to approve, 120 seconds to complete; requests are cancelled when the shift closes |
+| Cross-teller / cross-customer access | Ownership checks answer `404`; ids are ULIDs |
+
+## Data integrity
+
+- Money changes are atomic, with row locks in a fixed order.
+- Transactions, journal lines, approved reports, cash transfers and finished
+  authorizations cannot be changed or deleted (no endpoints, model guards,
+  `ON DELETE RESTRICT`).
+- Database `CHECK` constraints for amounts, balances, journal positions, correction
+  links and authorization statuses.
+- `Idempotency-Key` prevents double recording when a request is retried.
+
+## Remaining risks
+
+| # | Risk | Suggested mitigation |
+| --- | --- | --- |
+| L2 | In Mode B (PIN at the counter) the PIN passes through the teller client and is counted before other checks | Keep Mode B off unless needed; check the status before asking for the PIN |
+| L17 | The QR payload is the plain account number (not signed) | The QR only identifies; withdrawals still need the PIN |
+| L20 | Customer tokens have no abilities: any device where the customer is logged in can approve | Optional: device biometrics before showing the PIN pad |
+| L19 | Polling only | The customer must open the app to see a request |
+
+## Must be configured at deployment
+
+<Aside type="danger" title="Before using the system outside the exam environment">
+- Change every demo password and PIN from the seeder.
+- Set `APP_DEBUG=false` so `500` responses carry no stack trace.
+- Serve the API over **HTTPS**; the repository does not configure it.
+- Restrict CORS origins for production (all origins are allowed today; changing that
+  means adding `config/cors.php` to the backend).
+- Review dependencies: `composer audit` reports 12 advisories in packages that predate
+  this work (`laravel/framework` 13.24.0, `league/commonmark`, `league/flysystem`,
+  `symfony/http-foundation`, `symfony/yaml`), according to `docs/BACKEND_CHECKPOINT.md`.
+</Aside>
+
+## Recommendations for clients
+
+- **Staff web:** keep the token in `sessionStorage`; avoid third-party scripts and never
+  render untrusted HTML; log out at the end of a shift on shared counter computers.
+- **Expo:** store the token with `expo-secure-store`; never store the PIN; use a masked
+  numeric keypad for the PIN.
+- Never treat a hidden page as a protected page.

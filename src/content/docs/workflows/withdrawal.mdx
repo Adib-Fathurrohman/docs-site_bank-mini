@@ -1,0 +1,103 @@
+---
+title: Tarik tunai
+description: Dua cara mengotorisasi penarikan, dan alur penarikan dengan PIN yang diketik nasabah di loket (Mode B).
+sidebar:
+  order: 5
+sources:
+  - app/Http/Controllers/API/Teller/TransactionController.php
+  - app/Services/TransactionService.php
+  - app/Services/PinService.php
+  - docs/WORKFLOWS.md
+  - docs/PIN_VERIFICATION.md
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+import Mermaid from '../../../components/Mermaid.astro';
+
+Penarikan selalu dimulai oleh **teller** dan selalu butuh **PIN nasabah**. Cara
+nasabah memberikan PIN ditentukan oleh pengaturan `withdrawal_verification`.
+
+## Pilih alur
+
+| Mode | Pengaturan | Siapa mengetik PIN | Halaman |
+| --- | --- | --- | --- |
+| A · Persetujuan di aplikasi (bawaan) | `mobile` atau `both` | Nasabah, di HP sendiri | [Persetujuan PIN di aplikasi](/workflows/withdrawal-pin-authorization/) |
+| B · PIN di loket | `terminal` atau `both` | Nasabah, di layar teller | Halaman ini |
+
+Keduanya menghasilkan transaksi `withdrawal` yang sama: saldo − nominal, jurnal Debit
+201 Tabungan Nasabah / Kredit 101 Kas, dan saldo minimum harus tetap tersisa.
+
+<Aside type="caution" title="Mode B mati secara bawaan">
+Dengan pengaturan bawaan `mobile`, `POST /api/teller/withdrawals` menjawab `422`
+`Penarikan harus disetujui nasabah melalui aplikasi. Buat permintaan persetujuan
+penarikan untuk nasabah.` Admin harus mengubah pengaturan ke `terminal` atau `both`
+untuk memakai Mode B.
+</Aside>
+
+## Mode B: PIN di loket
+
+| | |
+| --- | --- |
+| Aktor | Teller, dengan nasabah yang mengetik PIN |
+| Prasyarat | Seperti setoran; mode `terminal`/`both`; PIN tidak diblokir; saldo − nominal ≥ saldo minimum |
+| Endpoint | `POST /api/teller/withdrawals` |
+| Input | `account_number`, `amount`, `pin` (tepat 6 digit), header opsional `Idempotency-Key` |
+
+<Mermaid
+	caption="Urutan pemeriksaan Mode B. PIN diperiksa lebih dulu, dalam transaksi database sendiri."
+	chart={`flowchart TD
+  A["POST /teller/withdrawals"] --> M{"Mode terminal / both?"}
+  M -- "tidak" --> M1["422 harus disetujui lewat aplikasi"]
+  M -- "ya" --> I{"Idempotency-Key sama<br/>dengan penarikan sebelumnya?"}
+  I -- "ya" --> I1["200 transaksi asli<br/>PIN tidak diperiksa ulang"]
+  I -- "tidak" --> P["PinService::verify<br/>transaksi DB sendiri"]
+  P -- "salah / diblokir" --> P1["422 · percobaan tetap tercatat"]
+  P -- "benar" --> T["Transaksi DB:<br/>lock teller → shift → nasabah"]
+  T --> C{"Shift, status,<br/>saldo minimum"}
+  C -- "gagal" --> C1["422 · rollback"]
+  C -- "lolos" --> W["saldo −= nominal<br/>insert transaksi + 2 jurnal"]
+  W --> OK["201 Transaction"]`}
+/>
+
+<Steps>
+
+1. Teller mencari nasabah dan memasukkan nominal.
+2. Nasabah mengetik PIN 6 digit di layar konfirmasi teller.
+3. Klien teller mengirim:
+
+   ```json
+   { "account_number": "RPL-2026-001", "amount": 30000, "pin": "123456" }
+   ```
+
+4. Backend memeriksa PIN (blokir bersama), lalu mencatat penarikan seperti setoran
+   dengan arah berlawanan dan pemeriksaan saldo minimum.
+
+</Steps>
+
+### Kegagalan
+
+| Status | Pesan | Penyebab |
+| --- | --- | --- |
+| `422` | `Penarikan harus disetujui nasabah melalui aplikasi. …` | Pengaturan `mobile` |
+| `422` | `PIN salah. Sisa percobaan: 2.` (+ `remaining_attempts`, `pin_locked_until`) | PIN salah |
+| `422` | `PIN diblokir sementara karena terlalu banyak percobaan salah. Coba lagi pukul HH:MM.` | PIN diblokir |
+| `422` | `Saldo tidak mencukupi. Saldo minimum Rp10.000 harus tetap tersisa; penarikan maksimal Rp990.000.` | Melanggar saldo minimum |
+| `422` | Semua kegagalan setoran | Shift, status rekening, validasi, idempotency |
+
+<Aside type="caution" title="Keterbatasan L2 · Urutan pemeriksaan">
+PIN diperiksa **sebelum** shift, status rekening, dan saldo. PIN salah tetap dihitung
+walaupun penarikan pasti gagal karena alasan lain, dan PIN benar me-reset penghitung
+walaupun penarikan kemudian gagal. Klien sebaiknya memeriksa `can_transact` dari
+`GET /teller/shift`, serta status, saldo, dan `pin_locked_until` dari lookup
+**sebelum** meminta PIN.
+</Aside>
+
+<Aside type="danger" title="PIN melewati klien teller">
+Di Mode B, PIN diketik di perangkat teller dan dikirim oleh klien teller. Inilah
+alasan Mode A menjadi bawaan. Klien tidak boleh menyimpan atau mencatat PIN.
+</Aside>
+
+Transaksi Mode B tidak punya `withdrawal_authorization` di respons; transaksi Mode A
+punya `withdrawal_authorization: { id, method: "mobile", approved_at }`.
+
+Endpoint lengkap: [API Teller](/api/teller/#tarik-tunai-pin-di-loket).

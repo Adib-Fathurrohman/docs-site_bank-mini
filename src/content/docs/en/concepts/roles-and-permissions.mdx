@@ -1,0 +1,147 @@
+---
+title: Roles and permissions (RBAC)
+description: The backend authorization model, role middleware, record ownership checks, and the capability matrix of the four actors.
+sidebar:
+  order: 2
+sources:
+  - routes/api.php
+  - app/Http/Middleware/EnsureStaffRole.php
+  - app/Http/Middleware/EnsureCustomer.php
+  - docs/RBAC.md
+  - tests/Feature/RoleAccessTest.php
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+## Four layers of checks
+
+| Layer | Question | Where | On failure |
+| --- | --- | --- | --- |
+| **Authentication** | Who is calling? | `auth:sanctum` on every route except login | `401 Unauthenticated.` |
+| **Authorization** | May this actor/role call this endpoint? Is this record theirs? | `staff`, `staff:{roles}`, `customer` middleware; ownership checks in controllers | `403` (role) or `404` (not theirs) |
+| **Business rules** | Is the action allowed in the current state? | Services (shift state, balance, PIN, report status, …) | `422` |
+| **Client visibility** | Which menus and buttons to show? | React / Expo code | — |
+
+<Aside type="danger" title="Hiding a button is not security">
+Every request is re-checked by the backend against the database (role and
+`is_active` are read fresh for every token). Clients only mirror the backend rules so
+users do not see pages that would fail.
+</Aside>
+
+## Actors and models
+
+Staff and customers are **different tables and models**. A customer is not a `users`
+row and has no `role`.
+
+| Actor | Model | `role` value | Notes |
+| --- | --- | --- | --- |
+| Administrator | `App\Models\User` | `admin` | Created by the seeder; cannot be created, edited, blocked or deleted through the API |
+| Supervisor | `User` | `supervisor` | |
+| Teller | `User` | `teller` | Usually a student on duty (`class`, `phone` fields) |
+| Customer (*nasabah*) | `App\Models\Customer` | — | Students; log in with NIS/account number + PIN |
+
+Each staff member has exactly one role. Multi-role users are not supported.
+
+<Mermaid
+	caption="How the actors relate to the data they own or review."
+	chart={`flowchart LR
+  admin(["Admin"]) -- "manages" --> staff["Staff<br/>tellers · supervisors"]
+  admin -- "opens & manages" --> cust["Customer accounts"]
+  admin -- "changes" --> set["Settings"]
+  teller(["Teller"]) -- "owns" --> shift["Shift / daily report"]
+  teller -- "records" --> trx["Transactions"]
+  teller -- "starts" --> wa["Withdrawal requests"]
+  customer(["Customer"]) -- "approves / rejects<br/>with PIN" --> wa
+  customer -- "views" --> cust
+  sup(["Supervisor"]) -- "approves · holds · rejects" --> shift
+  sup -- "authorizes corrections" --> trx
+  shift -- "approved" --> vault["Cash transfer<br/>to the vault"]`}
+/>
+
+## Middleware
+
+| Middleware | Class | Effect |
+| --- | --- | --- |
+| `auth:sanctum` | Laravel Sanctum | Requires a valid, unexpired bearer token. Otherwise `401 {"message":"Unauthenticated."}` |
+| `staff` | `EnsureStaffRole` | The token must belong to a `User` with `is_active = true`. Otherwise `403 "Fitur ini khusus untuk staf bank."` or `"Akun staf ini sudah dinonaktifkan."` |
+| `staff:admin,supervisor` (etc.) | `EnsureStaffRole` | As above, plus `role` must be in the list. Otherwise `403 "Peran Anda tidak memiliki akses ke fitur ini."` |
+| `customer` | `EnsureCustomer` | The token must belong to a `Customer` whose status is not `inactive`. Otherwise `403 "Fitur ini khusus untuk nasabah."` or `"Rekening ini sudah tidak aktif."` |
+| `throttle:login` | Rate limiter | 5 attempts per minute per username/identifier + IP |
+| `throttle:10,1` | Rate limiter | 10 corrections per minute per teller |
+| `throttle:withdrawal-authorization-*` | Named rate limiters | Withdrawal authorization request limits per actor (see [Withdrawal authorization API](/en/api/withdrawal-authorizations/)) |
+
+The role middleware runs **before** route model binding, so a caller with the wrong
+role always gets `403` and cannot learn whether an id exists.
+`tests/Feature/RoleAccessTest.php` checks every endpoint for every actor and verifies
+that every API route except login has `auth:sanctum` and an actor middleware.
+
+## Controller-level checks
+
+| Check | Endpoints | Result |
+| --- | --- | --- |
+| Tellers only see and print their own shifts | `GET /teller/daily-reports/{id}`, `/export` | `404` for other tellers' reports |
+| Tellers only print and correct their own transactions | `GET /teller/transactions/{id}/receipt`, `POST …/correct` | `404` |
+| Lists are scoped to the caller | `GET /teller/transactions`, `/teller/daily-reports`, `/teller/shift`, all `/customer/*` | Own data only; parameters cannot select another account |
+| Customer transaction detail | `GET /customer/transactions/{id}` | `404` for other customers' transactions |
+| Withdrawal requests (teller) | `/teller/withdrawal-authorizations/{id}[/cancel\|/complete]` | `404` for other tellers' requests |
+| Withdrawal requests (customer) | `/customer/withdrawal-authorizations/{id}[/approve\|/reject]` | `404` for other customers' requests |
+| Administrator accounts are protected | `PUT/PATCH/DELETE /admin/staff/{id}`, `…/block`, `…/unblock` | `403 "Akun administrator tidak dapat diubah melalui API."` |
+| Correction authorization | `POST /teller/transactions/{id}/correct` | Needs `supervisor_username` + `supervisor_password` of an active supervisor (`422` otherwise) |
+
+## Capability matrix
+
+✓ = allowed. — = refused by the backend (`403`). Only capabilities that actually
+exist in the backend are listed.
+
+| Capability | Admin | Supervisor | Teller | Customer |
+| --- | :-: | :-: | :-: | :-: |
+| Log in, log out, read own profile | ✓ | ✓ | ✓ | ✓ |
+| Read majors and settings | ✓ | ✓ | ✓ | — |
+| Change settings | ✓ | — | — | — |
+| List and view staff | ✓ | ✓ | — | — |
+| Create, edit, block, delete, import tellers/supervisors | ✓ | — | — | — |
+| List and view customer accounts (including closed ones) | ✓ | ✓ | — | — |
+| Open, edit, reset PIN, suspend, close accounts | ✓ | — | — | — |
+| Customer card data (QR payload) for printing | ✓ | — | — | — |
+| Statement PDF for any customer | ✓ | ✓ | — | — |
+| Look up one customer by QR / account number / NIS | — | — | ✓ | — |
+| Open, view, close own shift | — | — | ✓ | — |
+| Cash deposit and withdrawal | — | — | ✓ | — |
+| Start, poll, cancel and complete a withdrawal request | — | — | ✓ | — |
+| Approve (with own PIN) or reject a withdrawal request for own account | — | — | — | ✓ |
+| Correct own transaction | — | — (authorizes with credentials) | ✓ | — |
+| Own transactions of a day, receipt PDF | — | — | ✓ | — |
+| Own shift history, daily report PDF | — | — | ✓ | — |
+| View all daily reports, report PDF | — | ✓ | — | — |
+| Approve, hold, reject daily reports | — | ✓ | — | — |
+| Vault ledger (cash transfers) | — | ✓ | — | — |
+| Audit transaction log (+ PDF) | ✓ | ✓ | — | — |
+| Accounting journal, trial balance (+ PDF) | ✓ | ✓ | — | — |
+| Annual report PDF | ✓ | ✓ | — | — |
+| Own balance, statement, transaction detail, statement PDF | — | — | — | ✓ |
+| Own digital card (QR payload) | — | — | — | ✓ |
+| Change own PIN | — | — | — | ✓ |
+| Change own staff password | — | — | — | — |
+
+Notes:
+
+- **Supervisors and corrections.** A supervisor never calls the correction endpoint.
+  They authorize a teller's correction by typing their own username and password on
+  the teller's screen.
+- **Nobody** can edit or delete transactions, journal lines, approved reports or cash
+  transfers.
+- **Changing your own password** is not available to anyone. An admin can set
+  tellers' and supervisors' passwords with `PATCH /admin/staff/{id}`.
+
+Per-role details: [Admin](/en/roles/admin/), [Supervisor](/en/roles/supervisor/),
+[Teller](/en/roles/teller/), [Customer](/en/roles/customer/).
+
+## Guidance for clients
+
+- Route by `data.actor` from the login response, then by `data.user.role`.
+- The staff web app should refuse `actor: "customer"`, and the mobile app should
+  refuse `actor: "staff"`.
+- On `401`, or a `403` from a role check, delete the token and return to the login
+  page (UKK rubric 3.2). The only `403` that is a normal business error is
+  `Akun administrator tidak dapat diubah melalui API.` when editing staff.

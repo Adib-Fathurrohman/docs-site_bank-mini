@@ -1,0 +1,521 @@
+---
+/*
+ * The whole documentation as one printable document: cover, table of contents,
+ * then every page in sidebar order. Used by src/pages/print.astro (Indonesian)
+ * and src/pages/en/print.astro (English), and turned into a PDF by
+ * scripts/build-pdf.mjs.
+ *
+ * The page order, group labels and nesting follow the sidebar (outline.ts), so a
+ * page added to the site appears in the PDF without any change here.
+ *
+ * Every heading the table of contents points to carries an invisible marker
+ * (ZQMARK<n>ZQ). The PDF script finds the markers in a first PDF to learn the
+ * page numbers, writes them into the table of contents, removes the markers,
+ * and prints again.
+ */
+import type { CollectionEntry } from 'astro:content';
+import PrintContent from './PrintContent.astro';
+import { getOutline, type OutlineNode } from './outline';
+import summary from '../../data/api-summary.json';
+import sync from '../../data/sync-state.json';
+import pkg from '../../../package.json';
+import logo from '../../assets/logo.svg';
+
+interface Props {
+	lang: 'id' | 'en';
+}
+
+const { lang } = Astro.props;
+const isEnglish = lang === 'en';
+
+const t = isEnglish
+	? {
+			kind: 'Technical documentation',
+			title: 'E-Teller Bank Mini Sekolah',
+			subtitle: 'School internal banking system — Laravel REST API, workflows, roles and technical reference.',
+			toc: 'Table of contents',
+			sources: 'Sources',
+			comingSoon: 'Coming soon',
+			version: 'Documentation version',
+			backend: 'Backend documented up to commit',
+			frontend: 'Frontend documented up to commit',
+			generated: 'Generated',
+			routes: 'API routes',
+		}
+	: {
+			kind: 'Dokumentasi teknis',
+			title: 'E-Teller Bank Mini Sekolah',
+			subtitle: 'Sistem perbankan internal sekolah — REST API Laravel, alur kerja, peran, dan referensi teknis.',
+			toc: 'Daftar isi',
+			sources: 'Sumber',
+			comingSoon: 'Segera hadir',
+			version: 'Versi dokumentasi',
+			backend: 'Backend terdokumentasi sampai commit',
+			frontend: 'Frontend terdokumentasi sampai commit',
+			generated: 'Dibuat',
+			routes: 'Rute API',
+		};
+
+type Item =
+	| { kind: 'group'; id: string; number: string; label: string; level: number }
+	| {
+			kind: 'page';
+			id: string;
+			number: string;
+			label: string;
+			level: number;
+			path: string;
+			entry: CollectionEntry<'docs'>;
+	  };
+
+// Flatten the sidebar into numbered groups and pages (1, 1.1, 1.2, 2, 2.1, ...).
+const items: Item[] = [];
+function walk(nodes: OutlineNode[], prefix: number[], level: number) {
+	nodes.forEach((node, i) => {
+		const number = [...prefix, i + 1];
+		if (node.type === 'group') {
+			items.push({ kind: 'group', id: `g-${number.join('-')}`, number: number.join('.'), label: node.label, level });
+			walk(node.children, number, level + 1);
+		} else {
+			const { entry, path } = node;
+			const id = `p-${entry.id.replace(/[^a-z0-9]+/gi, '-')}`;
+			items.push({ kind: 'page', id, number: number.join('.'), label: entry.data.title, level, path, entry });
+		}
+	});
+}
+walk(await getOutline(lang), [], 1);
+
+const marks = new Map(items.map((item, i) => [item.id, `ZQMARK${i}ZQ`]));
+const heading = (level: number) => `h${Math.min(level, 6)}` as 'h1';
+const generated = new Intl.DateTimeFormat(isEnglish ? 'en-GB' : 'id-ID', { dateStyle: 'long' }).format(new Date());
+---
+
+<div class="print-doc">
+	<section class="print-cover">
+		<img src={logo.src} alt="" width="72" height="72" />
+		<p class="cover-kind">{t.kind}</p>
+		<h1 class="cover-title">{t.title}</h1>
+		<p class="cover-subtitle">{t.subtitle}</p>
+		<dl class="cover-meta">
+			<div><dt>{t.version}</dt><dd>{pkg.version}</dd></div>
+			<div><dt>{t.backend}</dt><dd><code>{sync.backend.commit}</code></dd></div>
+			<div><dt>{t.frontend}</dt><dd><code>{sync.frontend.commit}</code></dd></div>
+			<div><dt>{t.routes}</dt><dd>{summary.endpoints.length}</dd></div>
+			<div><dt>{t.generated}</dt><dd>{generated}</dd></div>
+		</dl>
+	</section>
+
+	<nav class="print-toc" aria-label={t.toc}>
+		<h1>{t.toc}</h1>
+		<ol>
+			{
+				items.map((item) => (
+					<li class:list={["toc-item", `toc-level-${item.level}`, `toc-kind-${item.kind}`]}>
+						<a href={`#${item.id}`}>
+							<span class="toc-num">{item.number}</span>
+							<span class="toc-label">{item.label}</span>
+							<span class="toc-dots" aria-hidden="true" />
+							<span class="toc-page" data-target={marks.get(item.id)} />
+						</a>
+					</li>
+				))
+			}
+		</ol>
+	</nav>
+
+	{
+		items.map((item) => {
+			const Heading = heading(item.level);
+			const mark = <span class="pdf-mark" aria-hidden="true">{marks.get(item.id)}</span>;
+			if (item.kind === 'group') {
+				return (
+					<Heading id={item.id} class="print-group">
+						{mark}
+						<span class="print-num">{item.number}</span> {item.label}
+					</Heading>
+				);
+			}
+			const { entry } = item;
+			const { description, sources, status } = entry.data;
+			return (
+				<article class="print-page" id={item.id} data-path={item.path} data-level={item.level}>
+					<Heading class="print-page-title">
+						{mark}
+						<span class="print-num">{item.number}</span> {item.label}
+					</Heading>
+					{description && <p class="print-description">{description}</p>}
+					{(status === 'coming-soon' || sources?.length) && (
+						<p class="print-meta">
+							{status === 'coming-soon' && <span class="print-status">{t.comingSoon}</span>}
+							{sources?.length && (
+								<span class="print-sources">
+									{t.sources}: {sources.map((source, i) => [i > 0 && ', ', <code>{source}</code>])}
+								</span>
+							)}
+						</p>
+					)}
+					<div class="print-content">
+						<PrintContent entry={entry} />
+					</div>
+				</article>
+			);
+		})
+	}
+</div>
+
+<script>
+	// Make the merged pages behave like one document: ids unique per page, page
+	// headings one level below the page title, links pointing inside the document.
+	const doc = document.querySelector<HTMLElement>('.print-doc');
+	if (doc) {
+		const pages = [...doc.querySelectorAll<HTMLElement>('.print-page')];
+		const pageByPath = new Map(pages.map((page) => [page.dataset.path!, page]));
+
+		for (const page of pages) {
+			const content = page.querySelector<HTMLElement>('.print-content')!;
+
+			// Show every tab panel, each with its tab label above it.
+			for (const tabs of content.querySelectorAll('starlight-tabs')) {
+				const labels = [...tabs.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent?.trim() ?? '');
+				tabs.querySelectorAll<HTMLElement>(':scope > [role="tabpanel"]').forEach((panel, i) => {
+					panel.hidden = false;
+					const label = document.createElement('p');
+					label.className = 'print-tab-label';
+					label.textContent = labels[i] ?? '';
+					panel.before(label);
+				});
+				tabs.querySelector('.tablist-wrapper')?.remove();
+			}
+			content.querySelectorAll('details').forEach((details) => (details.open = true));
+			content.querySelectorAll('.sl-anchor-link').forEach((link) => link.remove());
+
+			// Prefix ids so "#ringkasan" on two pages does not collide.
+			for (const el of content.querySelectorAll<HTMLElement>('[id]')) el.id = `${page.id}--${el.id}`;
+
+			// The page title takes the level of its sidebar depth; content headings follow it.
+			const shift = Number(page.dataset.level) - 1;
+			if (shift > 0) {
+				for (const h of [...content.querySelectorAll<HTMLElement>('h2, h3, h4, h5')]) {
+					const level = Math.min(Number(h.tagName[1]) + shift, 6);
+					const next = document.createElement(`h${level}`);
+					for (const attr of h.attributes) next.setAttribute(attr.name, attr.value);
+					next.append(...h.childNodes);
+					h.replaceWith(next);
+					next.parentElement?.classList.replace(`level-h${level - shift}`, `level-h${level}`);
+				}
+			}
+		}
+
+		// Links to other documentation pages jump to that page inside this document.
+		for (const link of doc.querySelectorAll<HTMLAnchorElement>('.print-content a[href]')) {
+			const url = new URL(link.getAttribute('href')!, location.href);
+			if (url.origin !== location.origin) continue;
+			const owner = link.closest<HTMLElement>('.print-page')!;
+			const target = url.pathname === location.pathname ? owner : pageByPath.get(url.pathname);
+			if (!target) {
+				link.removeAttribute('href');
+				continue;
+			}
+			const fragment = url.hash.slice(1) && `${target.id}--${decodeURIComponent(url.hash.slice(1))}`;
+			link.setAttribute('href', `#${fragment && document.getElementById(fragment) ? fragment : target.id}`);
+		}
+	}
+	document.documentElement.dataset.printReady = 'true';
+</script>
+
+<style is:global>
+	.print-doc {
+		--print-accent: var(--sl-color-accent);
+	}
+
+	.print-doc .pdf-mark {
+		position: absolute;
+		inset-inline-start: 0;
+		top: 0;
+		font-size: 2px;
+		line-height: 1;
+		color: #fff;
+		white-space: nowrap;
+		user-select: none;
+		pointer-events: none;
+	}
+
+	.print-group,
+	.print-page-title {
+		position: relative;
+	}
+
+	.print-num {
+		color: var(--print-accent);
+		font-variant-numeric: tabular-nums;
+		margin-inline-end: 0.35em;
+	}
+
+	/* ---------- Cover ---------- */
+
+	.print-cover {
+		display: flex;
+		flex-direction: column;
+		justify-content: center;
+		min-height: 70vh;
+	}
+
+	.print-cover img {
+		margin-bottom: 1.5rem;
+	}
+
+	.print-doc .print-cover .cover-kind {
+		margin: 0;
+		font-size: 0.875rem;
+		font-weight: 600;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--print-accent);
+	}
+
+	.print-doc .print-cover .cover-title {
+		margin: 0.5rem 0 0;
+		font-size: 2.5rem;
+		line-height: 1.15;
+	}
+
+	.print-doc .print-cover .cover-subtitle {
+		max-width: 34rem;
+		margin-top: 1rem;
+		font-size: 1.125rem;
+		color: var(--sl-color-gray-2);
+	}
+
+	.print-doc .cover-meta {
+		display: grid;
+		gap: 0.35rem;
+		margin-top: 3rem;
+		padding-top: 1.25rem;
+		border-top: 1px solid var(--sl-color-gray-5);
+		font-size: 0.875rem;
+	}
+
+	.print-doc .cover-meta div {
+		display: flex;
+		gap: 0.75rem;
+	}
+
+	.print-doc .cover-meta dt {
+		min-width: 16rem;
+		color: var(--sl-color-gray-3);
+	}
+
+	.print-doc .cover-meta dd {
+		margin: 0;
+	}
+
+	/* ---------- Table of contents ---------- */
+
+	.print-toc {
+		margin-top: 3rem;
+	}
+
+	.print-doc .print-toc h1 {
+		font-size: 1.75rem;
+		margin-bottom: 1.25rem;
+	}
+
+	.print-toc ol {
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	.print-doc .print-toc li {
+		margin: 0;
+		break-inside: avoid;
+	}
+
+	.print-toc a {
+		display: flex;
+		align-items: baseline;
+		gap: 0.5rem;
+		padding-block: 0.15rem;
+		color: inherit;
+		text-decoration: none;
+	}
+
+	.print-toc .toc-kind-group > a {
+		margin-top: 0.85rem;
+		font-weight: 600;
+	}
+
+	.print-toc .toc-level-2 > a {
+		padding-inline-start: 1.5rem;
+	}
+
+	.print-toc .toc-level-3 > a {
+		padding-inline-start: 3rem;
+	}
+
+	.print-toc .toc-num {
+		min-width: 2.25rem;
+		color: var(--print-accent);
+		font-variant-numeric: tabular-nums;
+	}
+
+	.print-toc .toc-dots,
+	.print-toc .toc-page {
+		display: none;
+	}
+
+	/* Page numbers exist only in the generated PDF (scripts/build-pdf.mjs). */
+	.print-toc[data-paged] .toc-dots {
+		display: block;
+		flex: 1;
+		min-width: 1rem;
+		border-bottom: 1px dotted var(--sl-color-gray-4);
+	}
+
+	.print-toc[data-paged] .toc-page {
+		display: block;
+		min-width: 2rem;
+		text-align: end;
+		font-variant-numeric: tabular-nums;
+	}
+
+	/* ---------- Pages ---------- */
+
+	.print-doc .print-group {
+		margin-top: 4rem;
+		padding-bottom: 0.5rem;
+		border-bottom: 2px solid var(--print-accent);
+		font-size: 2rem;
+	}
+
+	.print-page {
+		margin-top: 3rem;
+	}
+
+	.print-doc .print-page-title {
+		margin-top: 0;
+		font-size: 1.6rem;
+	}
+
+	.print-doc .print-group + .print-page {
+		margin-top: 1.5rem;
+	}
+
+	.print-doc .print-description {
+		margin-top: 0.5rem;
+		font-size: 1.05rem;
+		color: var(--sl-color-gray-2);
+	}
+
+	.print-doc .print-meta {
+		margin-top: 0.5rem;
+		font-size: 0.75rem;
+		color: var(--sl-color-gray-3);
+	}
+
+	.print-doc .print-status {
+		margin-inline-end: 0.75rem;
+		padding: 0.1rem 0.5rem;
+		border: 1px solid var(--sl-color-orange);
+		border-radius: 1rem;
+		color: var(--sl-color-orange-high);
+	}
+
+	.print-doc .print-content {
+		margin-top: 1.5rem;
+	}
+
+	.print-doc .print-tab-label {
+		margin-top: 1rem;
+		font-weight: 600;
+		font-size: 0.875rem;
+		color: var(--print-accent);
+	}
+
+	@media print {
+		/* Only the document: no site header, page title or footer. */
+		.page > header,
+		.content-panel:has(> .sl-container > h1#_top),
+		footer.sl-flex,
+		.pagination-links {
+			display: none !important;
+		}
+
+		main > .content-panel {
+			padding: 0;
+		}
+
+		.sl-container {
+			max-width: none !important;
+		}
+
+		.print-doc {
+			font-size: 10.5pt;
+		}
+
+		.print-cover {
+			min-height: 240mm;
+			break-after: page;
+		}
+
+		.print-toc {
+			margin-top: 0;
+		}
+
+		.print-doc .print-group,
+		.print-page {
+			break-before: page;
+			margin-top: 0;
+		}
+
+		.print-doc .print-group + .print-page {
+			break-before: avoid;
+		}
+
+		.print-group,
+		.print-page-title {
+			break-after: avoid;
+		}
+
+		/* Nothing scrolls on paper: wide content wraps or shrinks to the page. */
+		.print-doc .table-wrap {
+			overflow: visible;
+		}
+
+		.print-doc table {
+			font-size: 0.85em;
+		}
+
+		.print-doc tr {
+			break-inside: avoid;
+		}
+
+		.print-doc .diagram {
+			break-inside: avoid;
+		}
+
+		.print-doc .diagram-scroll {
+			overflow: visible;
+		}
+
+		.print-doc .diagram svg {
+			max-width: 100% !important;
+			height: auto;
+			max-height: 220mm;
+		}
+
+		.print-doc .expressive-code pre,
+		.print-doc .expressive-code .ec-line .code {
+			white-space: pre-wrap;
+			overflow-wrap: anywhere;
+		}
+
+		.print-doc .expressive-code {
+			break-inside: auto;
+		}
+
+		.print-doc .print-toc a {
+			color: inherit;
+		}
+	}
+</style>

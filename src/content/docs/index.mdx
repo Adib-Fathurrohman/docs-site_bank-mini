@@ -1,0 +1,102 @@
+---
+title: Beranda
+description: Dokumentasi teknis E-Teller Bank Mini Sekolah, sistem perbankan internal sekolah untuk proyek UKK.
+template: splash
+hero:
+  title: E-Teller Bank Mini Sekolah
+  tagline: Dokumentasi teknis sistem perbankan internal sekolah. API Laravel untuk setor dan tarik tunai di loket, persetujuan penarikan dengan PIN nasabah, shift teller dengan penutupan kas, dan jurnal akuntansi entri ganda.
+  actions:
+    - text: Mulai
+      link: /getting-started/introduction/
+      icon: right-arrow
+    - text: Referensi API
+      link: /api/
+      variant: minimal
+---
+
+import { Badge, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Mermaid from '../../components/Mermaid.astro';
+
+## Gambaran singkat
+
+Bank Mini Sekolah adalah bank internal untuk siswa. Semua uang bergerak lewat
+**teller di loket**: teller mencatat setoran tunai dan penarikan tunai. Siswa
+(nasabah) tidak pernah memindahkan uang sendiri. Mereka hanya dapat melihat
+rekeningnya dan **menyetujui atau menolak penarikan yang dimulai teller**,
+menggunakan PIN di aplikasi mereka.
+
+Sistem ini tidak terhubung ke payment gateway atau bank luar. Setiap transaksi
+otomatis menulis dua baris jurnal (debit dan kredit), dan supervisor memeriksa
+laporan harian setiap teller sebelum kas berpindah ke brankas.
+
+<Mermaid
+	caption="Satu backend Laravel melayani dua klien. Semua akses lewat REST API dengan token Sanctum."
+	chart={`flowchart LR
+  subgraph Klien
+    W["Aplikasi web staf<br/>React · Admin, Supervisor, Teller"]
+    M["Aplikasi mobile nasabah<br/>React Native + Expo · Siswa"]
+  end
+  W -- "HTTPS · JSON · Bearer token" --> API
+  M -- "HTTPS · JSON · Bearer token" --> API
+  subgraph Backend
+    API["Laravel REST API<br/>/api/*"]
+    DB[("MariaDB<br/>InnoDB")]
+    PDF["PDF<br/>DomPDF"]
+  end
+  API --> DB
+  API --> PDF`}
+/>
+
+## Mulai dari sini
+
+<CardGrid>
+	<LinkCard
+		title="Mulai"
+		description="Kebutuhan sistem, instalasi backend, konfigurasi .env, dan akun demo."
+		href="/getting-started/introduction/"
+	/>
+	<LinkCard
+		title="Arsitektur sistem"
+		description="Komponen, alur permintaan, lapisan backend, dan cara klien berkomunikasi dengan API."
+		href="/concepts/architecture/"
+	/>
+	<LinkCard
+		title="Alur kerja"
+		description="Setor, tarik, persetujuan PIN, koreksi, dan shift dari sisi server, lengkap dengan diagram."
+		href="/workflows/deposit/"
+	/>
+	<LinkCard
+		title="Referensi API"
+		description="67 endpoint dengan parameter, aturan validasi, contoh respons, dan error."
+		href="/api/"
+	/>
+	<LinkCard
+		title="Peran & hak akses"
+		description="Apa yang boleh dan tidak boleh dilakukan Admin, Supervisor, Teller, dan Nasabah."
+		href="/roles/admin/"
+	/>
+	<LinkCard
+		title="Referensi teknis"
+		description="Skema database, model, service, penanganan error, dan keamanan."
+		href="/reference/database-schema/"
+	/>
+</CardGrid>
+
+## Pilih sesuai peran Anda
+
+| Anda adalah | Baca terlebih dahulu |
+| --- | --- |
+| Pengembang backend | [Instalasi](/getting-started/installation/) → [Arsitektur](/concepts/architecture/) → [Skema database](/reference/database-schema/) → [Service](/reference/models-and-services/) |
+| Pengembang aplikasi web staf (React) | [Autentikasi](/workflows/authentication/) → [Peran & hak akses](/concepts/roles-and-permissions/) → [Referensi API](/api/) → [Error](/api/errors/) |
+| Pengembang aplikasi mobile nasabah (Expo) | [Autentikasi](/workflows/authentication/) → [API Nasabah](/api/customer/) → [Persetujuan PIN](/workflows/withdrawal-pin-authorization/) |
+| Penguji atau pembimbing UKK | [Pengenalan](/getting-started/introduction/) → [Siklus transaksi](/concepts/transaction-lifecycle/) → [Jejak audit](/concepts/audit-trail/) → [Keamanan](/reference/security/) |
+
+## Status komponen
+
+Dokumentasi ini hanya menjelaskan fitur yang dapat diverifikasi dari kode.
+
+| Komponen | Status | Keterangan |
+| --- | --- | --- |
+| Backend Laravel (REST API) | <Badge text="Selesai" variant="success" /> | 67 route, diuji otomatis. Didokumentasikan lengkap di situs ini |
+| Aplikasi web staf (React) | <Badge text="Dalam pengembangan" variant="caution" /> | Repositori terpisah. Dokumentasinya ditunda sampai aplikasinya selesai |
+| Aplikasi mobile nasabah (Expo) | <Badge text="Belum dimulai" variant="note" /> | Belum ada repositori. Lihat [Aplikasi klien](/clients/) |

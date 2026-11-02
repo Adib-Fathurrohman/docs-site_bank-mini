@@ -1,0 +1,114 @@
+---
+title: Cash deposit
+description: The deposit flow from finding the customer at the counter to the recorded transaction and journal, with preconditions, idempotency and failures.
+sidebar:
+  order: 4
+sources:
+  - app/Http/Controllers/API/Teller/TransactionController.php
+  - app/Http/Controllers/API/Teller/CustomerLookupController.php
+  - app/Services/TransactionService.php
+  - docs/WORKFLOWS.md
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+## Summary
+
+| | |
+| --- | --- |
+| Actor | Teller |
+| Preconditions | The teller has an active shift dated today; the account is `active` and not closed |
+| Endpoints | `GET /api/teller/customers/lookup`, then `POST /api/teller/deposits` |
+| Balance effect | + amount |
+| Journal | Debit 101 Kas / Credit 201 Tabungan Nasabah |
+
+## Flow
+
+<Mermaid
+	caption="A cash deposit at the counter."
+	chart={`sequenceDiagram
+  autonumber
+  actor N as Customer
+  participant T as Teller (web client)
+  participant A as API
+  participant D as Database
+  N->>T: hands over the QR card and cash
+  T->>A: GET /teller/customers/lookup?identifier=BANKMINI:RPL-2026-001
+  A-->>T: 200 name, status, balance
+  T->>A: POST /teller/deposits + Idempotency-Key
+  A->>D: lock teller → shift → customer · balance += amount
+  A->>D: insert transaction + 2 journal lines · COMMIT
+  A-->>T: 201 Transaction (balance_after, amount_in_words)
+  T-->>N: receipt (GET /teller/transactions/{id}/receipt)`}
+/>
+
+<Steps>
+
+1. **Find the customer.** `identifier` can be a scanned QR payload
+   (`BANKMINI:RPL-2026-001`), an account number or a NIS. The `BANKMINI:` prefix is
+   stripped, then the customer is found by account number, otherwise by NIS. The
+   lookup does **not** need a shift. Closed accounts are not found
+   (`404 Nasabah tidak ditemukan.`).
+
+2. **Record the deposit.**
+
+   ```http
+   POST /api/teller/deposits
+   Authorization: Bearer <token>
+   Idempotency-Key: 9f1c2e7a-0b4d-4c55-a1f0-2d9e6b1f3c11
+   Content-Type: application/json
+
+   { "account_number": "RPL-2026-001", "amount": 125000 }
+   ```
+
+   The key above is only an example; generate a new key (for example a UUID) for
+   every transaction.
+
+3. **The backend records it atomically**: lock the teller, lock the active shift,
+   re-check the idempotency key, lock the customer, check the status, add to the
+   balance, save the transaction, write two journal lines.
+
+4. **Show the result from the server**, not from the form values. Print the receipt
+   from `GET /api/teller/transactions/{id}/receipt`.
+
+</Steps>
+
+```json title="201 — example response from the demo database"
+{
+  "data": {
+    "id": 4, "type": "deposit", "type_label": "Setor tunai",
+    "amount": 125000, "amount_in_words": "seratus dua puluh lima ribu rupiah",
+    "balance_before": 500000, "balance_after": 625000,
+    "created_at": "2026-10-27T13:10:36.000000Z", "daily_report_id": 2,
+    "corrects_transaction_id": null, "note": null,
+    "customer": { "id": 1, "account_number": "RPL-2026-001", "full_name": "Budi Santoso" }
+  }
+}
+```
+
+## Failures
+
+| Status | Message / condition | Cause |
+| --- | --- | --- |
+| `422` | Field errors (`errors.amount`, `errors.account_number`) | Amount not an integer 1–100,000,000, account missing or closed |
+| `422` | `Belum ada shift yang dibuka. Buka shift dengan menghitung saldo awal terlebih dahulu.` | No active shift |
+| `422` | `Shift hari ini sudah ditutup. Transaksi baru tidak dapat dilakukan sampai laporan ditolak supervisor.` | Today's shift is closed |
+| `422` | `Shift tanggal 2026-10-26 belum ditutup. Tutup shift tersebut sebelum bertransaksi.` | An earlier day's shift is still open |
+| `422` | `Rekening berstatus ditangguhkan dan tidak dapat bertransaksi.` | Account `suspended` |
+| `422` | `Idempotency-Key ini sudah dipakai untuk transaksi lain. …` | Key reused for a different request |
+| `200` | Header `Idempotent-Replayed: true` | Same key and request: the original transaction is returned, nothing new is recorded |
+| `403` | Wrong role | Not a teller |
+| `500` | Server error | Everything is rolled back |
+
+<Aside type="tip" title="Retry with the same key">
+If the connection drops before the response arrives, resend the request **with the
+same `Idempotency-Key`**. A new key would record a second deposit.
+</Aside>
+
+<Aside type="note" title="Limitation L4 · CORS headers">
+CORS exposes no response headers, so a browser app on another origin cannot read
+`Idempotent-Replayed`. Tell the cases apart by status: `201` (new) and `200` (replay).
+</Aside>
+
+Full endpoints: [Teller API](/en/api/teller/#cash-deposit).

@@ -1,0 +1,176 @@
+---
+title: Installing and running the backend
+description: System requirements, Laravel backend installation, MariaDB setup, seeding, the server, the scheduler, demo accounts and tests.
+sidebar:
+  order: 2
+sources:
+  - README.md
+  - composer.json
+  - .env.example
+  - routes/console.php
+  - docs/BACKEND_CHECKPOINT.md
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+This page explains how to run the **backend** on a local machine. The web and mobile
+apps are separate projects and are not documented here yet.
+
+## System requirements
+
+| Requirement | Version | Notes |
+| --- | --- | --- |
+| PHP | `^8.3` | From `composer.json` |
+| Composer | 2.x | Installs the PHP dependencies |
+| MariaDB | Not pinned in the repository | InnoDB engine (set in `config/database.php`). Needed for `CHECK` constraints and row locks |
+| Git | — | To get the code |
+
+Main dependencies from `composer.json`:
+
+| Package | Purpose |
+| --- | --- |
+| `laravel/framework` `^13.8` | Framework (v13.24.0 installed) |
+| `laravel/sanctum` `^4.0` | API (bearer) tokens |
+| `barryvdh/laravel-dompdf` `^3.1` | PDF reports and receipts |
+| `openspout/openspout` `^5.13` | Staff import from `.xlsx`/`.csv` spreadsheets |
+
+## Installation
+
+<Steps>
+
+1. **Install dependencies and create `.env`.**
+
+   ```bash
+   composer install
+   cp .env.example .env
+   php artisan key:generate
+   ```
+
+2. **Create the MariaDB database and user.** Use your own password.
+
+   ```sql
+   CREATE DATABASE ukk_laravel;
+   CREATE USER 'bank-db-user'@'localhost' IDENTIFIED BY 'change-me';
+   GRANT ALL PRIVILEGES ON ukk_laravel.* TO 'bank-db-user'@'localhost';
+   ```
+
+3. **Point `.env` at MariaDB.**
+
+   ```dotenv
+   DB_CONNECTION=mariadb
+   DB_HOST=127.0.0.1
+   DB_PORT=3306
+   DB_DATABASE=ukk_laravel
+   DB_USERNAME=bank-db-user
+   DB_PASSWORD=change-me
+   ```
+
+   The other variables are described in [Configuration](/en/getting-started/configuration/).
+
+4. **Run the migrations and the seeder.**
+
+   ```bash
+   php artisan migrate:fresh --seed
+   ```
+
+   <Aside type="danger" title="migrate:fresh deletes all data">
+   This command drops every table and creates it again. Never run it on a database
+   whose data you want to keep.
+   </Aside>
+
+5. **Start the server.**
+
+   ```bash
+   php artisan serve
+   ```
+
+   The API is available at `http://localhost:8000/api`.
+
+</Steps>
+
+<Aside type="caution" title="`.env.example` uses SQLite">
+`.env.example` defaults to `DB_CONNECTION=sqlite`, while the README instructs MariaDB.
+Use MariaDB as in step 3 so that `CHECK` constraints and row locks behave as in the
+exam environment.
+</Aside>
+
+## Scheduler
+
+The scheduler is optional but recommended. It runs two tasks from
+`routes/console.php`:
+
+| Task | Schedule | Purpose |
+| --- | --- | --- |
+| `sanctum:prune-expired --hours=24` | Daily | Deletes expired token rows |
+| `bank:expire-withdrawal-authorizations` | Every minute | Marks abandoned withdrawal requests as `expired` |
+
+```bash
+php artisan schedule:work
+```
+
+Without the scheduler the API is still correct, because expiry is also applied every
+time the data is read. The scheduler only cleans up abandoned rows.
+
+## Access from a phone on the same network
+
+A phone cannot reach the laptop's `localhost`. Listen on all network interfaces and
+use the laptop's LAN IP:
+
+```bash
+php artisan serve --host=0.0.0.0 --port=8000
+```
+
+| Client | Example base URL |
+| --- | --- |
+| Browser on the same laptop | `http://localhost:8000/api` |
+| Phone on the same Wi-Fi | `http://<laptop-ip>:8000/api` |
+| Android emulator | `http://10.0.2.2:8000/api` |
+
+A production or demo URL has not been decided; set it in the deployment environment.
+
+## Demo accounts
+
+The seeder creates these accounts. The demo customers' opening balances are real
+deposits recorded in yesterday's teller shift, which is closed and approved, so
+balances, statements, journal and vault are consistent and the teller can open a new
+shift today.
+
+| Actor | Login | Password / PIN |
+| --- | --- | --- |
+| Administrator | `admin` | `password` |
+| Supervisor | `supervisor` | `password` |
+| Teller | `teller` | `password` |
+| Customer | NIS `20260001`–`20260003` or account `RPL-2026-001`, `DKV-2026-001`, `RPL-2026-002` | PIN `123456` |
+
+<Aside type="caution" title="Demo only">
+Change every demo password and PIN before using the system outside the exam
+environment. The seeded `withdrawal_verification` setting is `mobile`, so withdrawals
+need approval in the customer app unless an admin switches it to `terminal` or `both`.
+</Aside>
+
+## Running the tests
+
+```bash
+php artisan test
+```
+
+The tests use in-memory SQLite (see `phpunit.xml`). To make sure `CHECK` constraints
+and row locks also work on MariaDB, run the tests against a separate database. Never
+use `ukk_laravel`, because every test wipes it.
+
+```bash
+mariadb -u bank-db-user -p -e "CREATE DATABASE IF NOT EXISTS test_bank_mini"
+DB_CONNECTION=mariadb DB_DATABASE=test_bank_mini php artisan test
+```
+
+If the database user may not create that database, grant it as root first:
+`GRANT ALL PRIVILEGES ON test_bank_mini.* TO 'bank-db-user'@'localhost';`
+
+## Common problems
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `500` when opening a shift, column `daily_reports.opening_balance` missing | The database was built from an older version of the migrations (they were edited during development) | `php artisan migrate:fresh --seed` (deletes data) |
+| Table `withdrawal_authorizations` missing | The latest migration has not run | `php artisan migrate` |
+| `composer update` fails in the `boost:update` script | Laravel Boost is listed but was never installed | Run Composer with `--no-scripts` |
+| A `500` response contains a stack trace | `APP_DEBUG=true` | Set `APP_DEBUG=false` outside development |

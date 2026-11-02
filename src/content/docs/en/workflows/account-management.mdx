@@ -1,0 +1,113 @@
+---
+title: Account and staff management
+description: The administrator's flows to open, edit, suspend and close customer accounts, and to manage teller and supervisor accounts.
+sidebar:
+  order: 2
+sources:
+  - app/Http/Controllers/API/Admin/CustomerController.php
+  - app/Http/Controllers/API/Admin/StaffController.php
+  - app/Services/CustomerService.php
+  - app/Services/StaffImportService.php
+  - docs/WORKFLOWS.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+Every flow on this page is for the **administrator** only. Supervisors can read the
+account and staff lists but cannot change them.
+
+## Customer account lifecycle
+
+<Mermaid
+	caption="Account statuses. A closed account cannot be restored through the API."
+	chart={`stateDiagram-v2
+  direction LR
+  [*] --> active: admin opens the account (balance 0)
+  active --> suspended: admin suspends
+  suspended --> active: admin reactivates
+  active --> inactive: admin closes (graduation)
+  suspended --> inactive: admin closes (graduation)
+  inactive --> [*]
+  note right of inactive
+    soft delete · tokens revoked
+    history kept
+  end note`}
+/>
+
+### Opening an account
+
+| | |
+| --- | --- |
+| Endpoint | `POST /api/admin/customers` |
+| Preconditions | The major exists (`GET /api/majors`) |
+| Input | `nis`, `full_name`, `class` (`X`/`XI`/`XII`), `major_id`, `group` (`1`–`4`), `pin` (6 digits) |
+| Process | `CustomerService::create` generates `{CODE}-{YEAR}-{SERIAL}` (retries up to 3 times on a collision) |
+| Database effect | A `customers` row: status `active`, balance `0`, PIN hashed |
+| Response | `201` Customer |
+| Failures | `422` validation (NIS already used, including closed accounts); `403` not an admin |
+
+The opening balance is always `0`. Money only enters through a teller. The fields
+`account_number`, `account_status` and `balance` in the body are ignored.
+
+### Editing, suspending, resetting the PIN
+
+| | |
+| --- | --- |
+| Endpoint | `PUT\|PATCH /api/admin/customers/{id}` |
+| Input | Any subset of `nis`, `full_name`, `class`, `major_id`, `group`, `account_status` (`active`/`suspended` only), `pin` |
+| Effect | When `pin` is sent, `pin_failed_attempts` and `pin_locked_until` are reset too (the PIN lock is lifted) |
+| Cannot change | Account number and balance. Changing the major does not change the number |
+| Failures | `422` (e.g. `account_status: inactive`); `404` the account is closed |
+
+Suspending an account does not revoke the customer's tokens.
+
+### Closing an account (graduation)
+
+| | |
+| --- | --- |
+| Endpoint | `POST /api/admin/customers/{id}/deactivate` |
+| Process | One database transaction: status `inactive`, delete all customer tokens, soft delete |
+| Validation | No balance check |
+| Effect | `deleted_at` is set. Transactions and journal lines are untouched |
+| Failures | `404` if already closed |
+
+<Aside type="caution" title="Pay out the balance first">
+Closing does not require a zero balance and cannot be undone. Any remaining balance
+must be withdrawn through a teller **before** the account is closed, and the
+minimum-balance rule still applies (limitation L5).
+</Aside>
+
+Closed accounts remain readable through `GET /api/customers?trashed=with|only`,
+`GET /api/customers/{id}`, the statement PDF and the audit log.
+
+### Customer card data
+
+`GET /api/admin/customers/{id}/card` returns the data to print the card, including
+`qr_payload` (`BANKMINI:{account_number}`). The backend does not generate QR images;
+the client renders the payload as a QR code.
+
+## Staff management
+
+| Flow | Endpoint | Database effect | Notable failures |
+| --- | --- | --- | --- |
+| Create a teller/supervisor | `POST /api/admin/staff` | A `users` row (password hashed, `is_active` true) | `422` (role `admin` refused, duplicate username) |
+| Edit staff | `PUT\|PATCH /api/admin/staff/{id}` | `users` update (including password, role teller↔supervisor) | `403` for admin accounts |
+| Block | `POST /api/admin/staff/{id}/block` | `is_active` false, all tokens deleted | `403` for admin accounts |
+| Unblock | `POST /api/admin/staff/{id}/unblock` | `is_active` true | `403` for admin accounts |
+| Delete | `DELETE /api/admin/staff/{id}` | Row and tokens deleted if nothing references it | `409` when transactions, reports, approvals or settings changes reference it |
+| Import | `POST /api/admin/staff/import` (multipart `file`) | All rows inserted in one database transaction; missing passwords are generated and returned once | `422` keyed `rows.{i}.{field}`; nothing is inserted |
+
+<Aside type="note" title="Block, don't delete">
+A staff member who has recorded transactions cannot be deleted, because their history
+must keep pointing at their account (`ON DELETE RESTRICT`). Block the account instead.
+</Aside>
+
+## Not available
+
+- Restoring a closed account; closing with an automatic pay-out.
+- Managing administrator accounts through the API (including admin passwords).
+- Managing majors through the API (seeded, read-only).
+- Staff changing their own password.
+
+Full endpoints: [Admin API](/en/api/admin/).

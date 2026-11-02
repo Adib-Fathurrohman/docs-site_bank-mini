@@ -1,0 +1,251 @@
+---
+title: Admin
+description: Endpoints for reference data, settings, staff management and customer accounts. Some are also readable by supervisors.
+sidebar:
+  order: 3
+sources:
+  - routes/api.php
+  - app/Http/Controllers/API/Admin
+  - app/Http/Controllers/API/SettingsController.php
+  - app/Http/Requests
+  - app/Http/Resources
+  - docs/API.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Endpoint from '../../../../components/Endpoint.astro';
+
+Related flow: [Account and staff management](/en/workflows/account-management/).
+
+## Reference data
+
+<Endpoint method="GET" path="/api/majors" roles="admin,supervisor,teller" />
+
+All majors with their codes, not paginated, sorted by name:
+
+```json
+{ "data": [{ "id": 4, "code": "AK", "major_name": "Akuntansi dan Keuangan Lembaga" }, "..."] }
+```
+
+Majors are read-only; there are no endpoints to create or edit them.
+
+<Endpoint method="GET" path="/api/settings" roles="admin,supervisor,teller" />
+
+The current settings. The teller screen needs the scanner mode, the minimum balance and
+the withdrawal verification mode.
+
+## Settings
+
+<Endpoint method="PUT|PATCH" path="/api/admin/settings" roles="admin" />
+
+Send any subset of the keys. The response is the same as `GET /api/settings`.
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `min_balance` | Integer 0–1,000,000 | `10000` | Balance that must remain after a withdrawal |
+| `qr_scanner_mode` | `webcam`, `usb`, `disabled` | `webcam` | How the teller screen reads QR cards (camera, a USB scanner that types like a keyboard, or manual entry only) |
+| `withdrawal_verification` | `mobile`, `terminal`, `both` | `mobile` | PIN approval in the customer app, PIN typed at the counter (`POST /teller/withdrawals`), or either |
+
+```json title="200"
+{ "data": { "min_balance": 10000, "qr_scanner_mode": "webcam", "withdrawal_verification": "mobile" } }
+```
+
+## Staff
+
+<Endpoint method="GET" path="/api/staff" roles="admin,supervisor" />
+
+<Endpoint method="GET" path="/api/staff/{staff}" roles="admin,supervisor" />
+
+[Staff](#staff-object) sorted by name. Default `per_page` 15.
+
+| Query | Description |
+| --- | --- |
+| `status` | `active` (default), `inactive`, `all` |
+| `role` | `admin`, `supervisor`, `teller` |
+| `search` | Username or full name |
+
+<Aside type="caution" title="L11 · Filter values are not validated">
+Unknown `role` and `status` values return an empty list or the default instead of
+`422`.
+</Aside>
+
+<Endpoint method="POST" path="/api/admin/staff" roles="admin" />
+
+Create a teller or supervisor.
+
+| Field | Rules |
+| --- | --- |
+| `username` | Required, letters/digits/`-`/`_`, max 50, unique |
+| `full_name` | Required, max 255 |
+| `password` | Required, min 8 |
+| `role` | Required, `teller` or `supervisor` (`admin` is refused) |
+| `class` | Optional, max 20 (e.g. `XI AK 2`) |
+| `phone` | Optional, digits, spaces, `+`, `-`, max 20 (WhatsApp number) |
+
+```json title="201 — example from the demo database"
+{
+  "data": {
+    "id": 4, "username": "rina", "full_name": "Rina Wulandari", "class": "XI AK 2",
+    "phone": "081200000002", "role": "teller", "is_active": true,
+    "created_at": "2026-10-27T13:10:36.000000Z", "updated_at": "2026-10-27T13:10:36.000000Z"
+  }
+}
+```
+
+<Endpoint method="PUT|PATCH" path="/api/admin/staff/{staff}" roles="admin" />
+
+Any subset of `username`, `full_name`, `password`, `role` (`teller`/`supervisor`),
+`class`, `phone`. **403** for administrator accounts:
+`Akun administrator tidak dapat diubah melalui API.`
+
+<Endpoint method="POST" path="/api/admin/staff/{staff}/block" roles="admin" />
+
+<Endpoint method="POST" path="/api/admin/staff/{staff}/unblock" roles="admin" />
+
+Block keeps the account (its history must keep pointing at it), sets `is_active` to
+`false` and revokes its tokens. Unblock restores access. **200** with the updated
+[Staff](#staff-object). **403** for administrators.
+
+<Endpoint method="DELETE" path="/api/admin/staff/{staff}" roles="admin" />
+
+Permanently deletes an account that was never used. **200**
+`{ "message": "Akun staf dihapus." }`. **409** when transactions, reports or approvals
+reference it (`ON DELETE RESTRICT`):
+
+```json
+{ "message": "Staf ini memiliki riwayat transaksi, laporan, atau persetujuan sehingga tidak dapat dihapus. Blokir akunnya saja." }
+```
+
+<Endpoint method="POST" path="/api/admin/staff/import" roles="admin" />
+
+Create many tellers/supervisors from a spreadsheet. `multipart/form-data` with the
+field `file` (`.xlsx`, or `.csv` separated by commas or semicolons, max 2 MB, max 500
+rows). The first row is the header; Indonesian headers are accepted:
+
+| Data | Accepted headers |
+| --- | --- |
+| Username (required) | `username` |
+| Full name (required) | `full_name`, `nama`, `nama_lengkap` |
+| Password (optional, min 8) | `password`, `kata_sandi` |
+| Role (optional, default `teller`) | `role`, `peran` |
+| Class (optional) | `class`, `kelas` |
+| Phone (optional) | `phone`, `no_wa`, `whatsapp`, `no_hp` |
+
+All or nothing: if any row is invalid, no account is created. Rows without a password
+get a random 10-character one, returned **once** in `generated_password`.
+
+```text title="Example file (Excel with Indonesian regional settings, ; separated)"
+Username;Nama;Kelas;No WA;Password
+rina;Rina Wulandari;XI AK 1;081200000002;rahasia123
+dodi;Dodi Saputra;XI AK 2;081200000003;
+```
+
+```json title="201 — example from the demo database (shortened)"
+{
+  "data": {
+    "created": 2,
+    "users": [
+      { "id": 4, "username": "rina", "full_name": "Rina Wulandari", "role": "teller", "...": "...", "generated_password": null },
+      { "id": 5, "username": "dodi", "full_name": "Dodi Saputra", "role": "teller", "...": "...", "generated_password": "7cCQgOcUs6" }
+    ]
+  }
+}
+```
+
+**422:** errors are keyed `rows.{index}.{field}` (index 0 = spreadsheet row 2) and the
+message names the spreadsheet row:
+
+```json
+{ "message": "The username (baris 2) has already been taken.", "errors": { "rows.0.username": ["The username (baris 2) has already been taken."] } }
+```
+
+## Customer accounts
+
+<Endpoint method="GET" path="/api/customers" roles="admin,supervisor" />
+
+<Endpoint method="GET" path="/api/customers/{customer}" roles="admin,supervisor" />
+
+[Customer](#customer-object) list sorted by name (default `per_page` 15). Closed
+accounts are hidden from the list by default but can always be opened by id.
+
+| Query | Description |
+| --- | --- |
+| `search` | Name, NIS or account number |
+| `major_id`, `class`, `group`, `status` | Filters (not validated, see L11) |
+| `trashed` | `with` includes closed accounts, `only` shows only them |
+
+<Endpoint method="POST" path="/api/admin/customers" roles="admin" />
+
+Open an account. The account number is generated; the account starts `active` with a
+balance of `0`. `account_number`, `account_status` and `balance` in the body are
+ignored.
+
+| Field | Rules |
+| --- | --- |
+| `nis` | Required, max 20, unique (including closed accounts) |
+| `full_name` | Required, max 255 |
+| `class` | Required, `X`/`XI`/`XII` |
+| `major_id` | Required, an existing major |
+| `group` | Required, `1`–`4` |
+| `pin` | Required, exactly 6 digits (stored hashed) |
+
+```json title="201 — example from the demo database"
+{
+  "data": {
+    "id": 4, "account_number": "AK-2026-001", "nis": "20260004", "full_name": "Dewi Anggraini",
+    "class": "X", "group": "2",
+    "major": { "id": 4, "code": "AK", "major_name": "Akuntansi dan Keuangan Lembaga" },
+    "account_status": "active", "balance": 0,
+    "created_at": "2026-10-27T13:10:36.000000Z", "updated_at": "2026-10-27T13:10:36.000000Z", "deleted_at": null
+  }
+}
+```
+
+<Endpoint method="PUT|PATCH" path="/api/admin/customers/{customer}" roles="admin" />
+
+Any subset of `nis`, `full_name`, `class`, `major_id`, `group`, `account_status`
+(`active` or `suspended` only) and `pin` (6 digits; a PIN reset also lifts a PIN lock).
+The account number and balance cannot be changed. A closed account answers `404`.
+
+<Endpoint method="POST" path="/api/admin/customers/{customer}/deactivate" roles="admin" />
+
+Graduation: status `inactive`, tokens revoked, soft deleted. History stays. **200**
+Customer with `deleted_at`. No balance check (see L5).
+
+<Endpoint method="GET" path="/api/admin/customers/{customer}/card" roles="admin" />
+
+Data to print the customer card. Render `qr_payload` as a QR code; the backend does not
+generate the image.
+
+```json title="200 — example from the demo database"
+{
+  "data": {
+    "account_number": "AK-2026-001", "nis": "20260004", "full_name": "Dewi Anggraini",
+    "class": "X", "group": "2",
+    "major": { "code": "AK", "major_name": "Akuntansi dan Keuangan Lembaga" },
+    "account_status": "active",
+    "qr_payload": "BANKMINI:AK-2026-001"
+  }
+}
+```
+
+## Objects
+
+### Staff object
+
+`id`, `username`, `full_name`, `class` (nullable), `phone` (nullable), `role`,
+`is_active`, `created_at`, `updated_at`. Never returned: `password`,
+`remember_token`.
+
+### Customer object
+
+| Field | Notes |
+| --- | --- |
+| `id`, `nis`, `full_name`, `class`, `group` | |
+| `account_number` | e.g. `RPL-2026-001`, generated |
+| `major` | `{ id, code, major_name }` |
+| `account_status` | `active`, `suspended`, `inactive` |
+| `balance` | Rupiah |
+| `created_at`, `updated_at`, `deleted_at` | `deleted_at` is set when the account is closed |
+
+Never returned: `pin` (hash), `pin_failed_attempts`.

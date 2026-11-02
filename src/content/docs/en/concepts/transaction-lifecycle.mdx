@@ -1,0 +1,128 @@
+---
+title: Transaction lifecycle
+description: Transaction types, how a transaction is recorded atomically, corrections, idempotency, and how transactions relate to shifts and the journal.
+sidebar:
+  order: 3
+sources:
+  - app/Services/TransactionService.php
+  - app/Services/JournalService.php
+  - app/Models/Transaction.php
+  - database/migrations/2026_08_07_040023_create_transactions_table.php
+  - docs/DATA_MODEL.md
+  - docs/WORKFLOWS.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+A transaction is a **permanent** record of money moving in a customer's account. Once
+saved, it is never edited or deleted.
+
+## Transaction types
+
+| `type` | Label | Balance effect | Journal (debit / credit) | Created by |
+| --- | --- | --- | --- | --- |
+| `deposit` | Setor tunai | + amount | 101 Kas / 201 Tabungan | `POST /teller/deposits` |
+| `withdrawal` | Tarik tunai | − amount | 201 Tabungan / 101 Kas | `POST /teller/withdrawal-authorizations/{id}/complete` (approval in the app) or `POST /teller/withdrawals` (PIN at the counter) |
+| `deposit_correction` | Koreksi setoran | − amount | 201 Tabungan / 101 Kas | Correction of a deposit |
+| `withdrawal_correction` | Koreksi penarikan | + amount | 101 Kas / 201 Tabungan | Correction of a withdrawal |
+
+<Aside type="note" title="Transactions have no status">
+There is no status column. A transaction is either **recorded** or **not recorded**:
+failures save nothing. A transaction counts as "corrected" when a correction refers
+to it (`corrected_by`).
+</Aside>
+
+## The life of a transaction
+
+<Mermaid
+	caption="From recording to final. A correction is only possible while the original shift is still active."
+	chart={`stateDiagram-v2
+  direction LR
+  [*] --> Recorded: deposit / withdrawal in an open shift
+  Recorded --> Corrected: correction (once, shift still active, supervisor authorization)
+  Recorded --> InReport: shift closed
+  Corrected --> InReport: shift closed
+  InReport --> Recorded: report rejected, shift reopened
+  InReport --> Final: report approved
+  Final --> [*]
+  note right of Final
+    Cash moved to the vault.
+    No more corrections.
+  end note`}
+/>
+
+1. **Recorded** in the teller's open shift dated today.
+2. **May be corrected once** while its shift is still active (`open` or `rejected`).
+3. **Part of the daily report** once the shift is closed with matching cash.
+4. **Final** when the supervisor approves the report. If the report is rejected, the
+   shift reopens and corrections become possible again.
+
+## Atomic recording
+
+Deposits, withdrawals and corrections run in `TransactionService::record()` in **one
+database transaction**:
+
+<Mermaid
+	caption="The steps for a deposit or withdrawal inside one database transaction. If any step fails, everything is rolled back."
+	chart={`flowchart TD
+  A["BEGIN"] --> B["Lock the teller row"]
+  B --> C["Lock the active shift<br/>must be dated today"]
+  C --> D{"Idempotency-Key<br/>already used?"}
+  D -- "yes, same request" --> R["Return the original transaction · 200"]
+  D -- "no" --> E["Lock the customer row"]
+  E --> F{"Account status<br/>and balance rules"}
+  F -- "fail" --> X["ROLLBACK · 422"]
+  F -- "pass" --> G["Change the balance"]
+  G --> H["Insert the transaction<br/>balance_before · balance_after"]
+  H --> I["Insert 2 journal lines"]
+  I --> J["COMMIT · 201"]`}
+/>
+
+- The lock order is always the same (teller → shift → [authorization] → customer) to
+  avoid deadlocks.
+- `balance_before` and `balance_after` are stored on every transaction.
+- An unexpected failure returns `500` and **everything is rolled back**.
+
+## Corrections, not edits
+
+A mistake is reversed by a **correction transaction**: a new transaction of the same
+amount in the opposite direction, with opposite journal lines, linked to the original
+(`corrects_transaction_id`).
+
+| Rule | Enforced by |
+| --- | --- |
+| Only the teller's own transaction | Controller (`404` otherwise) |
+| Only while the original's shift is still active and is the teller's active shift | Service |
+| A transaction can be corrected only once | Unique key on `corrects_transaction_id` |
+| Corrections cannot be corrected | Service + `CHECK` |
+| Needs an active supervisor's username and password, and a reason | Service |
+| A deposit correction may take the balance below the minimum, but never below zero | Service + `CHECK balance >= 0` |
+| Allowed on suspended accounts | Service |
+
+Partial corrections are not available: a correction always reverses the full amount,
+then the teller records the right amount as a new transaction. See
+[Correction workflow](/en/workflows/correction/).
+
+## Idempotency
+
+`POST /teller/deposits`, `/teller/withdrawals` and `/teller/transactions/{id}/correct`
+accept an optional `Idempotency-Key` header (letters, digits, `_ . : -`, max 100).
+
+| Situation | Result |
+| --- | --- |
+| New key | The transaction is recorded, `201` |
+| Same key, same request | Nothing new is recorded. `200`, header `Idempotent-Replayed: true`, the original transaction |
+| Same key, different amount/customer/type | `422 Idempotency-Key ini sudah dipakai untuk transaksi lain. …` |
+
+Keys are per teller and never expire. Completing a withdrawal authorization
+(`…/complete`) needs no key because it is already idempotent: calling it again returns
+the same transaction.
+
+## Relation to shifts and the journal
+
+- Every transaction has a `daily_report_id` (the shift it was recorded in) and a
+  `user_id` (the teller).
+- Shift totals (`total_deposit`, `total_withdrawal`) are **net of corrections**.
+- Every transaction has exactly **two journal lines**, one debit and one credit, for
+  the same amount. See [Audit trail and journal](/en/concepts/audit-trail/).

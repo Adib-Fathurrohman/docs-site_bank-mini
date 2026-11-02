@@ -1,0 +1,9 @@
+---
+// Renders one documentation page's content inside PrintDocument.astro.
+import { render, type CollectionEntry } from 'astro:content';
+
+const { entry } = Astro.props as { entry: CollectionEntry<'docs'> };
+const { Content } = await render(entry);
+---
+
+<Content />

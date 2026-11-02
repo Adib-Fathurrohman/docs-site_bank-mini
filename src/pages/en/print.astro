@@ -1,0 +1,19 @@
+---
+// The whole documentation on one page, for printing and for scripts/build-pdf.mjs.
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import PrintDocument from '../../components/print/PrintDocument.astro';
+---
+
+<StarlightPage
+	frontmatter={{
+		title: 'Complete documentation',
+		description: 'The whole Bank Mini documentation on one page, ready to print or save as PDF.',
+		template: 'splash',
+		pagefind: false,
+		prev: false,
+		next: false,
+		head: [{ tag: 'meta', attrs: { name: 'robots', content: 'noindex' } }],
+	}}
+>
+	<PrintDocument lang="en" />
+</StarlightPage>

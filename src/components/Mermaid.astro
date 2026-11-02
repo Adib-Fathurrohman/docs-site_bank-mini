@@ -1,0 +1,152 @@
+---
+/*
+ * Renders a Mermaid diagram in the browser. The diagram source stays in the
+ * MDX page, so diagrams are reviewed and edited like any other content:
+ *
+ *   <Mermaid caption="..." chart={`flowchart LR
+ *     A --> B`} />
+ *
+ * Mermaid is loaded only on pages that contain a diagram, and the diagram is
+ * redrawn when the reader switches between light and dark mode. Without
+ * JavaScript the source text is shown instead.
+ */
+interface Props {
+	chart: string;
+	caption?: string;
+}
+
+const { chart, caption } = Astro.props;
+const source = chart.trim();
+---
+
+<figure class="diagram not-content">
+	<div class="diagram-scroll">
+		<pre class="mermaid" data-source={source}>{source}</pre>
+	</div>
+	{caption && <figcaption>{caption}</figcaption>}
+</figure>
+
+<script>
+	type Mermaid = typeof import('mermaid').default;
+	let mermaidModule: Promise<Mermaid> | undefined;
+
+	function palette(dark: boolean) {
+		return dark
+			? {
+					background: '#161a1d',
+					primaryColor: '#1d2a2b',
+					primaryBorderColor: '#3fb8a3',
+					primaryTextColor: '#e2e6e9',
+					secondaryColor: '#23292e',
+					tertiaryColor: '#1b2024',
+					lineColor: '#8b949c',
+					textColor: '#e2e6e9',
+					noteBkgColor: '#2c3338',
+					noteTextColor: '#e2e6e9',
+					noteBorderColor: '#5b646c',
+					actorBkg: '#1d2a2b',
+					actorBorder: '#3fb8a3',
+					actorTextColor: '#e2e6e9',
+					signalColor: '#bcc3c9',
+					signalTextColor: '#e2e6e9',
+					labelBoxBkgColor: '#1d2a2b',
+					labelTextColor: '#e2e6e9',
+					clusterBkg: '#1b2024',
+					clusterBorder: '#383f45',
+					edgeLabelBackground: '#161a1d',
+				}
+			: {
+					background: '#ffffff',
+					primaryColor: '#eef7f5',
+					primaryBorderColor: '#0b6b5d',
+					primaryTextColor: '#12181c',
+					secondaryColor: '#f7f8f9',
+					tertiaryColor: '#f7f8f9',
+					lineColor: '#5c6870',
+					textColor: '#12181c',
+					noteBkgColor: '#fdf6e3',
+					noteTextColor: '#12181c',
+					noteBorderColor: '#d9c58b',
+					actorBkg: '#eef7f5',
+					actorBorder: '#0b6b5d',
+					actorTextColor: '#12181c',
+					signalColor: '#39434a',
+					signalTextColor: '#12181c',
+					labelBoxBkgColor: '#eef7f5',
+					labelTextColor: '#12181c',
+					clusterBkg: '#f7f8f9',
+					clusterBorder: '#c9d0d5',
+					edgeLabelBackground: '#ffffff',
+				};
+	}
+
+	async function renderDiagrams() {
+		const nodes = Array.from(document.querySelectorAll<HTMLElement>('pre.mermaid[data-source]'));
+		if (nodes.length === 0) return;
+
+		mermaidModule ??= import('mermaid').then((module) => module.default);
+		const mermaid = await mermaidModule;
+		const dark = document.documentElement.dataset.theme !== 'light';
+
+		mermaid.initialize({
+			startOnLoad: false,
+			securityLevel: 'strict',
+			theme: 'base',
+			fontFamily: getComputedStyle(document.body).fontFamily,
+			themeVariables: { ...palette(dark), fontSize: '14px' },
+			flowchart: { curve: 'basis', padding: 12 },
+			sequence: { mirrorActors: false, messageMargin: 32 },
+		});
+
+		for (const node of nodes) {
+			node.removeAttribute('data-processed');
+			node.textContent = node.dataset.source ?? '';
+		}
+
+		await mermaid.run({ nodes });
+	}
+
+	renderDiagrams();
+
+	new MutationObserver(() => renderDiagrams()).observe(document.documentElement, {
+		attributes: true,
+		attributeFilter: ['data-theme'],
+	});
+</script>
+
+<style>
+	.diagram {
+		margin-block: 1.5rem;
+		padding: 1rem;
+		border: 1px solid var(--bm-border);
+		border-radius: 0.625rem;
+		background-color: var(--sl-color-black);
+	}
+
+	.diagram-scroll {
+		overflow-x: auto;
+	}
+
+	.mermaid {
+		display: flex;
+		justify-content: center;
+		margin: 0;
+		padding: 0;
+		border: 0;
+		background: none;
+		font-size: 0.8rem;
+		color: var(--sl-color-gray-3);
+		white-space: pre;
+	}
+
+	.mermaid[data-processed='true'] {
+		white-space: normal;
+	}
+
+	figcaption {
+		margin-top: 0.75rem;
+		font-size: 0.8125rem;
+		text-align: center;
+		color: var(--sl-color-gray-3);
+	}
+</style>

@@ -1,0 +1,95 @@
+---
+title: Saldo dan aturan rekening
+description: Format uang, batas nominal, saldo minimum, status rekening, format nomor rekening, dan keterbatasan terkait saldo.
+sidebar:
+  order: 4
+sources:
+  - app/Services/TransactionService.php
+  - app/Services/CustomerService.php
+  - app/Services/SettingsService.php
+  - database/migrations/2026_08_07_035953_create_customers_table.php
+  - docs/DATA_MODEL.md
+  - docs/BACKEND_CHECKPOINT.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Uang selalu bilangan bulat Rupiah
+
+Semua nominal di permintaan dan respons adalah **bilangan bulat Rupiah** tanpa desimal:
+`50000` berarti Rp50.000. Kirim angka, bukan teks yang sudah diformat.
+
+| Aturan | Nilai | Penegak |
+| --- | --- | --- |
+| Nominal transaksi | Bilangan bulat 1 – 100.000.000 | Form request |
+| Nominal tersimpan | Selalu > 0 | `CHECK amount > 0` |
+| Saldo nasabah | Tidak pernah negatif | `CHECK balance >= 0` |
+| Terbilang | `amount_in_words` dihitung server, misalnya `seratus dua puluh lima ribu rupiah` | Resource |
+
+## Saldo minimum
+
+Penarikan ditolak jika sisa saldo akan berada di bawah **saldo minimum**. Nilainya
+diatur admin lewat pengaturan `min_balance` (bawaan `10000`, dari `BANK_MIN_BALANCE`).
+
+```text
+boleh menarik jika:  saldo − nominal ≥ min_balance
+```
+
+Contoh pesan penolakan (`422`), dengan saldo Rp1.000.000 dan minimum Rp10.000:
+
+```json
+{ "message": "Saldo tidak mencukupi. Saldo minimum Rp10.000 harus tetap tersisa; penarikan maksimal Rp990.000." }
+```
+
+| Situasi | Saldo minimum berlaku? |
+| --- | --- |
+| Tarik tunai (PIN di loket) | Ya, saat transaksi dicatat |
+| Permintaan penarikan lewat aplikasi | Ya, saat permintaan dibuat **dan** saat diselesaikan |
+| Setor tunai | Tidak relevan |
+| Koreksi setoran | Tidak. Boleh di bawah minimum, tetapi tidak di bawah nol |
+
+Nasabah dapat melihat saldo minimum di `GET /api/customer/balance` (`min_balance`).
+
+## Status rekening
+
+| Status | Login | Setor / tarik | Koreksi | Lookup teller | Cara diatur |
+| --- | :-: | :-: | :-: | :-: | --- |
+| `active` | ✓ | ✓ | ✓ | ✓ | Saat dibuat; diubah admin |
+| `suspended` | ✓ | — | ✓ | ✓ | Diubah admin |
+| `inactive` | — | — | — | — | Hanya lewat penutupan (lulus), yang juga melakukan soft delete |
+
+- Rekening yang ditangguhkan tetap dapat login dan melihat saldo. Tokennya tidak
+  dicabut.
+- Penutupan rekening (`POST /admin/customers/{id}/deactivate`) mengubah status ke
+  `inactive`, mencabut semua token nasabah, dan melakukan soft delete. Riwayat
+  transaksi dan jurnal tidak berubah.
+- Memulihkan rekening yang sudah ditutup **belum tersedia**.
+
+## Nomor rekening
+
+Format: `{KODE JURUSAN}-{TAHUN AJARAN}-{URUT}`, contoh `RPL-2026-001`.
+
+| Bagian | Aturan |
+| --- | --- |
+| Kode jurusan | Dari `majors.code`: AK, BR, BD, MP, DKV, RPL, TKJ, LPS (hasil seeder) |
+| Tahun ajaran | Tahun dimulainya tahun ajaran Juli–Juni saat rekening dibuka. Oktober 2026 → `2026`; Juni 2027 → `2026`; Juli 2027 → `2027` |
+| Nomor urut | Minimal 3 digit, diisi nol, mulai ulang per jurusan dan tahun ajaran, tidak pernah dipakai ulang (rekening yang ditutup ikut dihitung). Setelah `999` adalah `1000` |
+
+Nomor dibuat oleh `CustomerService::create`, yang mencoba ulang hingga 3 kali jika
+terjadi bentrok nomor karena pembuatan bersamaan. Nomor rekening dan saldo **tidak
+dapat diubah** lewat API; mengganti jurusan tidak mengganti nomor.
+
+## Keterbatasan yang perlu diketahui
+
+<Aside type="caution" title="L1 · Nominal harus kelipatan Rp100 di klien">
+Backend tidak mewajibkan kelipatan 100, tetapi uang hanya dapat dihitung dalam pecahan
+≥ Rp100. Nominal seperti Rp150 membuat shift **tidak dapat ditutup** sampai transaksi
+itu dikoreksi (sudah diverifikasi). Klien sebaiknya memaksa kelipatan Rp100.
+</Aside>
+
+| # | Keterbatasan | Dampak |
+| --- | --- | --- |
+| L5 | Menutup rekening tidak mensyaratkan saldo nol dan tidak dapat dibatalkan. Dengan saldo minimum > 0, Rp10.000 terakhir tidak pernah dapat ditarik | Peringatkan sebelum menutup rekening yang masih bersaldo |
+| L15 | `customers.balance` bertipe integer 32-bit (maksimal Rp2.147.483.647) | Tidak menjadi masalah untuk skala sekolah |
+
+Daftar lengkap ada di [Keterbatasan yang diketahui](/reference/known-limitations/).

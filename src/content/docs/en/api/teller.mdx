@@ -1,0 +1,278 @@
+---
+title: Teller
+description: Endpoints for the shift, customer lookup, cash deposits, withdrawals with the PIN at the counter, transactions, receipts, corrections and shift history.
+sidebar:
+  order: 4
+sources:
+  - routes/api.php
+  - app/Http/Controllers/API/Teller
+  - app/Services/TransactionService.php
+  - app/Services/DailyReportService.php
+  - app/Http/Resources/TransactionResource.php
+  - docs/API.md
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Endpoint from '../../../../components/Endpoint.astro';
+
+Every endpoint on this page needs a **teller** token. Withdrawals approved in the app
+are documented separately in [Withdrawal authorizations](/en/api/withdrawal-authorizations/).
+
+## Shift and cash closing
+
+A teller works inside a shift (one per day), which is also the daily report. Cash
+counts are sent as `{"denominations": {"<denomination>": <quantity>, ...}}` with
+denominations `100000`…`100` and quantities 0–100,000. Full flow:
+[Shifts and daily reports](/en/workflows/shift-management/).
+
+<Endpoint method="GET" path="/api/teller/shift" roles="teller" />
+
+The active shift (`open` or `rejected`) with **live** totals and its transactions.
+`can_transact` is `false` for a shift from an earlier day (it can only be closed).
+
+```json title="200 — example from the demo database (shortened)"
+{
+  "data": {
+    "id": 2, "report_date": "2026-10-27", "status": "open",
+    "opening_balance": 150000, "opened_at": "2026-10-27T13:10:36.000000Z",
+    "transaction_count": 5, "total_deposit": 132000, "total_withdrawal": 30000,
+    "system_balance": 252000, "physical_balance": null, "difference": null,
+    "submitted_at": null, "reviewed_at": null, "supervisor_note": null, "supervisor": null,
+    "opening_counts": [
+      { "denomination": 50000, "quantity": 2, "subtotal": 100000 },
+      { "denomination": 10000, "quantity": 5, "subtotal": 50000 }
+    ],
+    "closing_counts": []
+  },
+  "can_transact": true,
+  "transactions": [ { "id": 4, "type": "deposit", "amount": 125000, "...": "Transaction" } ]
+}
+```
+
+Without an active shift: `{ "data": null, "can_transact": false, "closed_today": false }`
+(`closed_today` is `true` when today's shift has already been closed).
+
+<Endpoint method="POST" path="/api/teller/shift/open" roles="teller" />
+
+```json title="Body"
+{ "denominations": { "50000": 2, "10000": 5 } }
+```
+
+**201** the new [DailyReport](/en/api/supervisor/#dailyreport-object) with
+`status: "open"`, `opening_balance: 150000` and `opening_counts`. **422** when a shift
+is still running (`Shift tanggal 2026-10-26 masih berjalan. …`) or today's shift was
+already closed (`Shift hari ini sudah ditutup dan tidak dapat dibuka lagi.`).
+
+<Endpoint method="POST" path="/api/teller/shift/close" roles="teller" />
+
+```json title="Body"
+{ "denominations": { "100000": 2, "50000": 1, "2000": 1 } }
+```
+
+**200** the DailyReport with `status: "submitted"`, the snapshot totals,
+`physical_balance`, `difference: 0` and `closing_counts`. Withdrawal requests still open
+in this shift are cancelled.
+
+```json title="422 — physical cash does not match, nothing is saved"
+{
+  "message": "Uang fisik kurang Rp2.000 dari saldo sistem. Periksa ulang hitungan dan slip; laporan tidak dapat ditutup atau dicetak sampai sesuai.",
+  "system_balance": 252000,
+  "physical_balance": 250000,
+  "difference": -2000
+}
+```
+
+## Shift history
+
+<Endpoint method="GET" path="/api/teller/daily-reports" roles="teller" />
+
+<Endpoint method="GET" path="/api/teller/daily-reports/{dailyReport}" roles="teller" />
+
+The teller's own shifts, newest first (default `per_page` 15). The detail adds the cash
+counts, `cash_transfer` and a top-level `transactions` list. Another teller's report
+returns **404**.
+
+<Endpoint method="GET" path="/api/teller/daily-reports/{dailyReport}/export" roles="teller" />
+
+The printable closing report PDF (`laporan-harian-2026-10-27-teller-loket-1.pdf`) with
+the recap, denomination tables, transactions and signature lines. **Locked** until the
+shift is closed with matching cash:
+
+```json title="422"
+{ "message": "Laporan harian baru dapat dicetak setelah shift ditutup dengan uang fisik yang sesuai saldo sistem." }
+```
+
+## Customer lookup
+
+<Endpoint method="GET" path="/api/teller/customers/lookup" roles="teller" />
+
+Query `identifier` (required, max 60): a scanned **QR payload**
+(`BANKMINI:RPL-2026-001`), or a typed account number or NIS. Send it URL-encoded. No
+shift needed. Closed accounts are not found (**404** `Nasabah tidak ditemukan.`).
+
+```json title="200 — example from the demo database"
+{
+  "data": {
+    "id": 1, "account_number": "RPL-2026-001", "nis": "20260001", "full_name": "Budi Santoso",
+    "class": "X", "group": "1", "major_name": "Rekayasa Perangkat Lunak",
+    "account_status": "active", "balance": 500000,
+    "pin_locked_until": null
+  }
+}
+```
+
+`pin_locked_until` is set while the PIN is locked; until then no withdrawal request can
+be created for the customer.
+
+## Idempotency
+
+`POST /teller/deposits`, `/teller/withdrawals` and `/teller/transactions/{id}/correct`
+accept an optional `Idempotency-Key` header (letters, digits, `_ . : -`, max 100). Send
+a new key per transaction and **the same key when retrying** after a timeout.
+
+| Situation | Result |
+| --- | --- |
+| New key | The transaction is recorded, **201** |
+| Same key and request | Nothing new. **200**, header `Idempotent-Replayed: true`, the original transaction |
+| Same key, different amount/customer/type | **422** `Idempotency-Key ini sudah dipakai untuk transaksi lain. …` |
+
+## Cash deposit
+
+<Endpoint method="POST" path="/api/teller/deposits" roles="teller" />
+
+One database transaction: lock the customer, add to the balance, save the transaction,
+write the journal (Debit 101 Kas / Credit 201 Tabungan).
+
+| Field | Rules |
+| --- | --- |
+| `account_number` | Required, an existing account that is not closed |
+| `amount` | Required, integer 1 – 100,000,000 |
+
+```json title="201 — example from the demo database"
+{
+  "data": {
+    "id": 4, "type": "deposit", "type_label": "Setor tunai",
+    "amount": 125000, "amount_in_words": "seratus dua puluh lima ribu rupiah",
+    "balance_before": 500000, "balance_after": 625000,
+    "created_at": "2026-10-27T13:10:36.000000Z", "daily_report_id": 2,
+    "corrects_transaction_id": null, "note": null,
+    "customer": { "id": 1, "account_number": "RPL-2026-001", "full_name": "Budi Santoso" }
+  }
+}
+```
+
+| `422` message | Cause |
+| --- | --- |
+| `Belum ada shift yang dibuka. Buka shift dengan menghitung saldo awal terlebih dahulu.` | No active shift |
+| `Shift hari ini sudah ditutup. Transaksi baru tidak dapat dilakukan sampai laporan ditolak supervisor.` | Today's shift is closed |
+| `Shift tanggal 2026-10-26 belum ditutup. Tutup shift tersebut sebelum bertransaksi.` | Yesterday's shift still open |
+| `Rekening berstatus ditangguhkan dan tidak dapat bertransaksi.` | Account suspended |
+
+## Cash withdrawal (PIN at the counter)
+
+<Endpoint method="POST" path="/api/teller/withdrawals" roles="teller" />
+
+A withdrawal **authorized by the customer's PIN typed at the counter** (Mode B).
+Journal: Debit 201 Tabungan / Credit 101 Kas.
+
+<Aside type="caution" title="Only when the setting allows it">
+Only available when `withdrawal_verification` is `terminal` or `both`. With the default
+`mobile`, this endpoint answers **422**
+`Penarikan harus disetujui nasabah melalui aplikasi. Buat permintaan persetujuan
+penarikan untuk nasabah.`
+</Aside>
+
+| Field | Rules |
+| --- | --- |
+| `account_number`, `amount` | As for deposits |
+| `pin` | Required, exactly 6 digits |
+
+**201** a [Transaction](#transaction-object) with `type: "withdrawal"`. **422** in
+addition to the deposit errors:
+
+```json title="Minimum balance"
+{ "message": "Saldo tidak mencukupi. Saldo minimum Rp10.000 harus tetap tersisa; penarikan maksimal Rp990.000." }
+```
+
+```json title="Wrong PIN"
+{ "message": "PIN salah. Sisa percobaan: 2.", "remaining_attempts": 2, "pin_locked_until": null }
+```
+
+```json title="PIN locked (3 wrong in a row, 15 minutes)"
+{
+  "message": "PIN diblokir sementara karena terlalu banyak percobaan salah. Coba lagi pukul 20:25.",
+  "remaining_attempts": 0,
+  "pin_locked_until": "2026-10-27T13:25:37.830610Z"
+}
+```
+
+The PIN counter is shared with login, approval in the app and PIN change. See
+[limitation L2](/en/workflows/withdrawal/) about the order of checks.
+
+## Transactions and receipts
+
+<Endpoint method="GET" path="/api/teller/transactions" roles="teller" />
+
+The teller's own transactions for one day (`?date=`, default today), newest first,
+default `per_page` 50. Each includes `corrected_by` (the correction that reversed it, or
+null) and `authorized_by` (for corrections).
+
+<Endpoint method="GET" path="/api/teller/transactions/{transaction}/receipt" roles="teller" />
+
+Receipt PDF on 80 mm paper (`struk-4.pdf`): transaction number, date, account, name,
+class, amount, amount in words, balance after, teller and signature lines. Own
+transactions only (**404** otherwise).
+
+## Corrections
+
+<Endpoint method="POST" path="/api/teller/transactions/{transaction}/correct" roles="teller" limit="10/min per teller" />
+
+Reverses a mistake with a new transaction of the same amount in the opposite direction
+(`deposit_correction` / `withdrawal_correction`), linked to the original. Supports
+`Idempotency-Key`. Full rules: [Correcting a transaction](/en/workflows/correction/).
+
+| Field | Rules |
+| --- | --- |
+| `reason` | Required, max 255 |
+| `supervisor_username`, `supervisor_password` | Required, an active supervisor |
+
+```json title="Body"
+{ "reason": "Salah ketik, seharusnya Rp7.000", "supervisor_username": "supervisor", "supervisor_password": "password" }
+```
+
+```json title="201 — example from the demo database"
+{
+  "data": {
+    "id": 7, "type": "deposit_correction", "type_label": "Koreksi setoran",
+    "amount": 70000, "amount_in_words": "tujuh puluh ribu rupiah",
+    "balance_before": 1070000, "balance_after": 1000000,
+    "created_at": "2026-10-27T13:10:38.000000Z", "daily_report_id": 2,
+    "corrects_transaction_id": 6, "note": "Salah ketik, seharusnya Rp7.000",
+    "authorized_by": { "id": 2, "full_name": "Supervisor Bank Mini" },
+    "customer": { "id": 3, "account_number": "RPL-2026-002", "full_name": "Citra Lestari" }
+  }
+}
+```
+
+**422:** `errors.supervisor_password` = `Otorisasi supervisor gagal. …`;
+`Transaksi ini sudah pernah dikoreksi.`; `Transaksi koreksi tidak dapat dikoreksi lagi.`;
+`Koreksi hanya dapat dilakukan pada shift tempat transaksi asli dicatat, …`;
+`Saldo nasabah sudah tidak mencukupi untuk membatalkan setoran ini.`
+
+## Transaction object
+
+| Field | Notes |
+| --- | --- |
+| `id`, `type`, `type_label` | Label in Indonesian (`Setor tunai`, `Koreksi setoran`, …) |
+| `amount`, `amount_in_words` | Always > 0; amount in words for slips and receipts |
+| `balance_before`, `balance_after` | Customer balance before and after the transaction |
+| `created_at`, `daily_report_id` | The shift it belongs to |
+| `corrects_transaction_id`, `note` | Corrections: the reversed transaction and the reason |
+| `authorized_by` | Corrections: `{ id, full_name }` of the supervisor |
+| `corrected_by` | Ordinary transactions: `{ id, type, created_at }` of the correction, or null |
+| `customer` | `{ id, account_number, full_name }` |
+| `teller` | `{ id, full_name }`, on audit endpoints |
+| `journals` | Only on `GET /audit/transactions/{id}` |
+| `withdrawal_authorization` | Withdrawals approved in the app: `{ id, method: "mobile", approved_at }`. Returned by `complete` and the audit detail |
+
+Never returned: `idempotency_key`.
