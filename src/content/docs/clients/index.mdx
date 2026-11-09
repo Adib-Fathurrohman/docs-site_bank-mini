@@ -23,29 +23,22 @@ Seluruh komponen dalam ekosistem Bank Mini telah selesai diimplementasikan (**Co
 
 | Komponen | Pengguna | Status | Lingkungan & URL Produksi | Keterangan |
 | --- | --- | --- | --- | --- |
-| **Aplikasi Web Staf** (React) | Admin, Supervisor, Teller | <Badge text="Selesai" variant="success" /> | `https://bank.rumput.tech` | Repositori `bank_mini`. Vite 8, React 19, TypeScript, React Router 8, TanStack Query 5, Tailwind CSS 4, Vitest |
-| **Aplikasi Nasabah** (Expo & React Native) | Siswa (Nasabah) | <Badge text="Selesai" variant="success" /> | `https://app.rumput.tech` & APK Android | Repositori `bank-mini-mobile`. Expo SDK, React Native, Firebase Auth (Google Sign-In), FCM Push, SecureStore |
-| **Backend REST API** (Laravel 12) | Klien Web & Mobile | <Badge text="Selesai" variant="success" /> | `https://bank.rumput.tech/api` *(lihat rekomendasi)* | Repositori `bank-mini-laravel`. 83 endpoint RESTful JSON, Sanctum, FCM Notifier, DomPDF |
+| **Aplikasi Web Staf** (React) | Admin, Supervisor, Teller | <Badge text="Selesai" variant="success" /> | `https://bank.rumput.tech/api/` | Repositori `bank_mini`. Vite 8, React 19, TypeScript, React Router 8, TanStack Query 5, Tailwind CSS 4, Vitest |
+| **Aplikasi Nasabah** (Expo & React Native) | Siswa (Nasabah) | <Badge text="Selesai" variant="success" /> | APK Android (GitHub Releases) | Repositori `bank-mini-mobile`. Expo SDK, React Native, Firebase Auth (Google Sign-In), FCM Push, SecureStore |
+| **Backend REST API** (Laravel 13) | Klien Web & Mobile | <Badge text="Selesai" variant="success" /> | `https://api-bank.rumput.tech/api` | Repositori `bank-mini-laravel`. 83 endpoint RESTful JSON, Sanctum, FCM Notifier, DomPDF |
 | **Situs Dokumentasi** (Astro Starlight) | Pengembang & Penguji | <Badge text="Selesai" variant="success" /> | `https://docs-bank.rumput.tech` | Repositori `docs-site`. Panduan dwibahasa (ID & EN), pencarian instan, ekspor PDF 140 halaman |
 
 ## Alamat URL produksi
 
-Setiap layanan diarahkan ke domain pada VPS (`rumput.tech`):
+Setiap layanan berjalan di VPS `rumput.tech`, masing-masing dengan domain dan sertifikat HTTPS sendiri:
 
-- **Aplikasi Staf:** [https://bank.rumput.tech](https://bank.rumput.tech) — portal operasional loket teller, supervisor review, administrasi bank, dan audit.
-- **Aplikasi Nasabah (PWA / Web):** [https://app.rumput.tech](https://app.rumput.tech) — portal digital nasabah untuk cek saldo, mutasi, kartu QR, dan persetujuan penarikan. Rilis Android APK tersedia melalui GitHub Releases repositori `bank-mini-mobile`.
+- **Aplikasi Staf:** [https://bank.rumput.tech/api/](https://bank.rumput.tech/api/) — portal operasional loket teller, supervisor review, administrasi bank, dan audit. Aplikasi berada di jalur `/api/`; `https://bank.rumput.tech` mengarahkan ke sana.
+- **Backend REST API:** `https://api-bank.rumput.tech/api` — base URL untuk kedua klien (`VITE_API_BASE_URL` di web staf, `EXPO_PUBLIC_API_URL` di aplikasi nasabah). Cek kesehatan: `https://api-bank.rumput.tech/up`.
+- **Aplikasi Nasabah:** APK Android, didistribusikan melalui GitHub Releases repositori `bank-mini-mobile`. Tidak ada versi web.
 - **Situs Dokumentasi Teknis:** [https://docs-bank.rumput.tech](https://docs-bank.rumput.tech) — buku panduan arsitektur sistem, referensi 83 API endpoint, skema basis data, dan tata kelola perbankan.
 
-<Aside type="tip" title="Rekomendasi URL API Backend">
-Saat ini backend Laravel diakses melalui reverse-proxy pada origin yang sama dengan aplikasi web: `https://bank.rumput.tech/api` (dan `https://app.rumput.tech/api`).
-
-Untuk konfigurasi subdomain mandiri (*dedicated API domain*):
-1. **Pilihan Utama (Direkomendasikan): `https://api-bank.rumput.tech`**
-   - Mengikuti pola penamaan *flat single-level subdomain* yang konsisten dengan `docs-bank.rumput.tech`.
-   - Penerbitan sertifikat SSL Let's Encrypt / Certbot sangat mudah tanpa memerlukan sertifikat multi-level atau wildcard khusus.
-2. **Alternatif Hierarkis: `https://api.bank.rumput.tech`**
-   - Standar industri sub-subdomain (`api.<app>.<domain>`), rapi secara struktur hirarki.
-3. **Konfigurasi CORS:** Jika menggunakan subdomain API terpisah, pastikan file konfigurasi `.env` Laravel mengatur `SANCTUM_STATEFUL_DOMAINS=bank.rumput.tech,app.rumput.tech` dan CORS `allowed_origins` mencakup `https://bank.rumput.tech` dan `https://app.rumput.tech`.
+<Aside type="note" title="Autentikasi lintas domain">
+Web staf dan API berada di domain berbeda, sehingga API mengizinkan origin `https://bank.rumput.tech` lewat CORS (`CORS_ALLOWED_ORIGINS`). Kedua klien memakai token Bearer Sanctum di header `Authorization`, bukan cookie, jadi `SANCTUM_STATEFUL_DOMAINS` dan CSRF tidak dipakai. Aplikasi Android tidak terkena CORS.
 </Aside>
 
 ## Dokumentasi aplikasi web staf

@@ -63,10 +63,26 @@ sync point, and rebuild the PDF.
 
 ## Deployment
 
-`npm run build` produces a fully static site in `dist/` that any static host can
-serve. Set `SITE_URL` (for example `SITE_URL=https://docs.example.sch.id npm run build`)
-to enable the sitemap and canonical URLs. Without it, the build warns that the sitemap
-was skipped; nothing else changes.
+Production: **https://docs-bank.rumput.tech**, a static build served by nginx on the
+`rumput.tech` VPS from `/var/www/rumput/bank-mini/docs/current` (versioned folders in
+`releases/`, `current` is a symlink switched only after the release passed its checks).
+
+1. Commit, bump `version` in `package.json`, tag and push: `git tag -a v0.2.1 -m "Docs v0.2.1"`,
+   `git push origin main v0.2.1`.
+2. Build the artifact (static build with `SITE_URL`, link and API checks, secret scan):
+   `deploy/build-release.sh 0.2.1` → `dist-release/rumput-bank-mini-docs-v0.2.1.tar.gz` + `.sha256`.
+3. Publish it: `gh release create v0.2.1 dist-release/rumput-bank-mini-docs-v0.2.1.tar.gz
+   dist-release/rumput-bank-mini-docs-v0.2.1.tar.gz.sha256 --verify-tag --title "Docs v0.2.1"`.
+4. On the VPS: `/var/www/rumput/bank-mini/bin/deploy-docs.sh 0.2.1 <sha256>` (downloads,
+   verifies the checksum, checks the build, switches `current`; nothing is restarted).
+   Rollback: `/var/www/rumput/bank-mini/bin/rollback-docs.sh <older version>`.
+
+The server copies of the scripts and the nginx vhost are in `deploy/server/`; after editing
+them, copy them to `/var/www/rumput/bank-mini/bin/` and `/etc/nginx/sites-available/` again.
+The HTTPS certificate is Let's Encrypt (certbot webroot `/var/www/rumput/bank-mini/tmp/acme`,
+renewed by certbot's timer).
+
+For any other static host, `SITE_URL=https://… npm run build` and serve `dist/`.
 
 ## Project structure
 

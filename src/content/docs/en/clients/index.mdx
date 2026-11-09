@@ -23,29 +23,22 @@ All components in the Bank Mini ecosystem are fully implemented (**Completed**) 
 
 | Component | Target Users | Status | Production Environment & URL | Notes |
 | --- | --- | --- | --- | --- |
-| **Staff Web App** (React) | Admin, Supervisor, Teller | <Badge text="Completed" variant="success" /> | `https://bank.rumput.tech` | Repository `bank_mini`. Vite 8, React 19, TypeScript, React Router 8, TanStack Query 5, Tailwind CSS 4, Vitest |
-| **Customer App** (Expo & React Native) | Students (Customers) | <Badge text="Completed" variant="success" /> | `https://app.rumput.tech` & Android APK | Repository `bank-mini-mobile`. Expo SDK, React Native, Firebase Auth (Google Sign-In), FCM Push, SecureStore |
-| **Backend REST API** (Laravel 12) | Web & Mobile Clients | <Badge text="Completed" variant="success" /> | `https://bank.rumput.tech/api` *(see recommendation)* | Repository `bank-mini-laravel`. 83 RESTful JSON endpoints, Sanctum auth, FCM Push Notifier, DomPDF |
+| **Staff Web App** (React) | Admin, Supervisor, Teller | <Badge text="Completed" variant="success" /> | `https://bank.rumput.tech/api/` | Repository `bank_mini`. Vite 8, React 19, TypeScript, React Router 8, TanStack Query 5, Tailwind CSS 4, Vitest |
+| **Customer App** (Expo & React Native) | Students (Customers) | <Badge text="Completed" variant="success" /> | Android APK (GitHub Releases) | Repository `bank-mini-mobile`. Expo SDK, React Native, Firebase Auth (Google Sign-In), FCM Push, SecureStore |
+| **Backend REST API** (Laravel 13) | Web & Mobile Clients | <Badge text="Completed" variant="success" /> | `https://api-bank.rumput.tech/api` | Repository `bank-mini-laravel`. 83 RESTful JSON endpoints, Sanctum auth, FCM Push Notifier, DomPDF |
 | **Technical Documentation** (Astro Starlight) | Developers & Examiners | <Badge text="Completed" variant="success" /> | `https://docs-bank.rumput.tech` | Repository `docs-site`. Bilingual (ID & EN), instant search, 140-page PDF booklet |
 
 ## Production deployment URLs
 
-All services are hosted on VPS infrastructure (`rumput.tech`):
+Every service runs on the `rumput.tech` VPS, each with its own domain and HTTPS certificate:
 
-- **Staff Web App:** [https://bank.rumput.tech](https://bank.rumput.tech) — counter teller operations, supervisor reviews, bank administration, and auditing.
-- **Customer Web / PWA:** [https://app.rumput.tech](https://app.rumput.tech) — customer portal for balance inquiry, statement history, digital QR cards, and withdrawal authorizations. Android APK releases are distributed via GitHub Releases in `bank-mini-mobile`.
+- **Staff Web App:** [https://bank.rumput.tech/api/](https://bank.rumput.tech/api/) — counter teller operations, supervisor reviews, bank administration, and auditing. The app lives under the `/api/` path; `https://bank.rumput.tech` redirects there.
+- **Backend REST API:** `https://api-bank.rumput.tech/api` — the base URL for both clients (`VITE_API_BASE_URL` in the staff web app, `EXPO_PUBLIC_API_URL` in the customer app). Health check: `https://api-bank.rumput.tech/up`.
+- **Customer App:** an Android APK, distributed through GitHub Releases in `bank-mini-mobile`. There is no web version.
 - **Documentation Site:** [https://docs-bank.rumput.tech](https://docs-bank.rumput.tech) — architecture guides, 83 endpoint API reference, database schema, and compliance notes.
 
-<Aside type="tip" title="Backend API URL Recommendation">
-Currently, the Laravel backend API is served via reverse proxy on the same origin as the web client: `https://bank.rumput.tech/api` (and `https://app.rumput.tech/api`).
-
-For a dedicated API subdomain:
-1. **Primary Recommendation: `https://api-bank.rumput.tech`**
-   - Follows the flat single-level subdomain naming pattern aligned with `docs-bank.rumput.tech`.
-   - Simplifies Let's Encrypt / Certbot certificate provisioning without multi-level wildcard complexities.
-2. **Hierarchical Alternative: `https://api.bank.rumput.tech`**
-   - Traditional nested subdomain structure (`api.<app>.<domain>`).
-3. **CORS Configuration:** If using a separate API subdomain, ensure Laravel's `.env` configures `SANCTUM_STATEFUL_DOMAINS=bank.rumput.tech,app.rumput.tech` and CORS `allowed_origins` includes `https://bank.rumput.tech` and `https://app.rumput.tech`.
+<Aside type="note" title="Cross-domain authentication">
+The staff web app and the API are on different domains, so the API allows the origin `https://bank.rumput.tech` through CORS (`CORS_ALLOWED_ORIGINS`). Both clients send Sanctum Bearer tokens in the `Authorization` header, not cookies, so `SANCTUM_STATEFUL_DOMAINS` and CSRF are not used. The Android app is not subject to CORS.
 </Aside>
 
 ## Staff web app documentation

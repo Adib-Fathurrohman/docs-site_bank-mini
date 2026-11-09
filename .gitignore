@@ -17,3 +17,4 @@ npm-debug.log*
 # macOS
 .DS_Store
 .claude/
+dist-release/
