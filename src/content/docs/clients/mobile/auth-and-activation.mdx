@@ -1,0 +1,178 @@
+---
+title: Autentikasi & Aktivasi Akun
+description: Alur masuk Firebase, aktivasi rekening menggunakan NIS sekolah, pembuatan PIN 6 digit, dan sistem penguncian sesi aplikasi.
+sidebar:
+  order: 2
+sources:
+  - bank-mini-mobile/src/session/SessionProvider.tsx
+  - bank-mini-mobile/src/session/firebaseAuth.ts
+  - bank-mini-mobile/src/components/GoogleButton.tsx
+  - bank-mini-mobile/src/app/sign-in.tsx
+  - bank-mini-mobile/src/app/register.tsx
+  - bank-mini-mobile/src/app/verify-email.tsx
+  - bank-mini-mobile/src/app/forgot-password.tsx
+  - bank-mini-mobile/src/app/activate.tsx
+  - bank-mini-mobile/src/app/create-pin.tsx
+  - bank-mini-mobile/src/app/unlock.tsx
+  - bank-mini-mobile/src/app/pin-reset.tsx
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+Aplikasi mobile Bank Mini menerapkan sistem autentikasi bertingkat yang menggabungkan **Firebase Authentication** untuk verifikasi identitas email siswa dan **Laravel Sanctum** untuk sesi perbankan.
+
+## Mesin Status Sesi (`SessionProvider`)
+
+Akses antarmuka diatur secara ketat oleh state machine pada `SessionProvider`:
+
+<Mermaid
+  caption="Siklus status sesi aplikasi mobile nasabah."
+  chart={`stateDiagram-v2
+  [*] --> loading: Buka aplikasi
+  loading --> signedOut: Belum ada sesi / sesi kedaluwarsa
+  loading --> locked: Sesi valid ditemukan di KeyStore
+  signedOut --> signedOut: Login Firebase
+  signedOut --> activate: Akun belum ditautkan NIS
+  activate --> createPin: Penautan NIS berhasil
+  signedOut --> createPin: Login berhasil, belum ada PIN
+  createPin --> ready: PIN 6 digit berhasil dibuat
+  locked --> ready: PIN unlock benar
+  ready --> locked: 1 menit di background / tombol Kunci
+  ready --> signedOut: Logout / akun ditutup`}
+/>
+
+| Tahap (*Stage*) | Kondisi | Layar yang Ditampilkan |
+| --- | --- | --- |
+| `loading` | Membaca token dari Keychain/KeyStore dan status Firebase | Splash / Indikator pemuatan |
+| `unavailable` | API backend tidak dapat dihubungi saat inisialisasi | Pesan gangguan jaringan & tombol coba lagi |
+| `signedOut` | Belum ada token sesi atau telah logout | Masuk (*Sign In*), Daftar, Lupa Password, Verifikasi Email |
+| `createPin` | Token sesi aktif, namun `pin_set === false` | Pembuatan PIN awal 6 digit (`/create-pin`) |
+| `locked` | Sesi aktif tersimpan, aplikasi terkunci untuk privasi | Buka Kunci PIN (`/unlock`) |
+| `ready` | Sesi aktif dan PIN telah terbuka | Halaman utama tab dan fitur perbankan |
+
+---
+
+## 1. Masuk & Pendaftaran Firebase (`/sign-in`, `/register`)
+
+- **Google Sign-In Pertama:** Aplikasi menampilkan tombol **Lanjutkan dengan Google** (`GoogleButton.tsx`) sebagai alur masuk utama pada perangkat Android (`@react-native-google-signin/google-signin`) maupun web. Siswa dapat login dengan akun Google sekolah hanya dengan sekali ketuk tanpa perlu menghafal kata sandi terpisah.
+- **Email & Password Sekolah:** Siswa juga dapat mendaftar atau masuk menggunakan kombinasi email sekolah dan password yang telah didaftarkan pihak admin bank saat pembukaan rekening.
+- **Verifikasi Email:** Siswa yang mendaftar mandiri via email/password wajib memverifikasi tautan email sebelum dapat melanjutkan ke tahap aktivasi rekening.
+- **Pertukaran Token:** Setelah autentikasi Firebase berhasil, aplikasi menukar `id_token` Firebase dengan token sesi Sanctum (`POST /api/customer/auth/login`).
+- **Penanganan Belum Aktivasi:** Jika login menghasilkan kode error `403 account_not_linked`, aplikasi secara otomatis mengarahkan siswa ke layar aktivasi rekening via NIS.
+
+---
+
+## 2. Aktivasi Rekening via NIS (`/activate`)
+
+Tahap ini menautkan akun Firebase siswa secara permanen dengan rekening tabungan Bank Mini:
+
+<Steps>
+
+1. Siswa memasukkan **Nomor Induk Siswa (NIS)** resmi dari sekolah.
+2. Aplikasi memanggil endpoint backend:
+   ```http
+   POST /api/customer/activation
+   Content-Type: application/json
+
+   {
+     "id_token": "<firebase-id-token>",
+     "nis": "20260001"
+   }
+   ```
+3. Backend memverifikasi bahwa:
+   - Email pada `id_token` Firebase cocok dengan email terdaftar pada data rekening siswa.
+   - Status aktivasi rekening masih `pending`.
+   - Email Firebase telah berstatus terverifikasi (*verified*).
+4. Jika valid, backend mengembalikan status **200 OK** beserta token sesi perbankan Sanctum, dan mengarahkan siswa ke layar pembuatan PIN.
+
+</Steps>
+
+---
+
+## 3. Pembuatan PIN Awal 6 Digit (`/create-pin`)
+
+Setelah rekening berhasil diaktifkan (atau setelah admin melakukan reset PIN nasabah):
+
+- Siswa wajib membuat 6 digit angka PIN melalui keypad interaktif.
+- Aplikasi meminta konfirmasi PIN untuk mencegah kesalahan pengetikan.
+- Permintaan dikirim ke backend via:
+  ```http
+  POST /api/customer/pin/setup
+  Content-Type: application/json
+  Authorization: Bearer <sanctum-token>
+
+  {
+    "id_token": "<fresh-firebase-id-token>",
+    "pin": "135790",
+    "pin_confirmation": "135790"
+  }
+  ```
+- Setelah PIN berhasil disimpan (status **201 Created**), state sesi beralih ke `ready` dan siswa langsung dapat mengakses seluruh layanan perbankan.
+
+---
+
+## 4. Penguncian Sesi & Buka Kunci (`/unlock`)
+
+Untuk melindungi kerahasiaan saldo saat ponsel dipinjamkan atau ditinggalkan:
+
+- **Penguncian Otomatis:** Jika aplikasi berpindah ke latar belakang (*background*) selama lebih dari 60 detik (`LOCK_AFTER_MS`), state aplikasi otomatis beralih ke `locked`.
+- **Kunci Manual:** Siswa dapat mengunci aplikasi kapan saja melalui tombol **Kunci aplikasi** di tab Profil.
+- **Buka Kunci:** Siswa memasukkan 6 digit PIN pada layar unlock:
+  ```http
+  POST /api/customer/unlock
+  Content-Type: application/json
+  Authorization: Bearer <sanctum-token>
+
+  {
+    "pin": "135790"
+  }
+  ```
+- **Proteksi Salah PIN:** Percobaan PIN salah dibatasi maksimal 3 kali berturut-turut. Jika batas terlampaui, PIN akan terkunci sementara selama 15 menit (`pin_locked_until`).
+- **Tombol Lupa PIN:** Pada layar unlock dan beranda terdapat tombol **Lupa PIN?** yang mengarahkan nasabah ke alur permohonan reset PIN mandiri (`/pin-reset`).
+
+---
+
+## 5. Permohonan Reset PIN Mandiri (`/pin-reset`)
+
+Jika nasabah lupa 6 digit PIN transaksi, aplikasi menyediakan alur pemulihan mandiri dengan proteksi keamanan bertingkat:
+
+<Steps>
+
+1. **Konfirmasi Identitas (`ConfirmIdentity.tsx`):**
+   Nasabah wajib mengonfirmasi ulang identitasnya dengan masuk kembali menggunakan Google Sign-In atau password Firebase untuk memperoleh `id_token` baru (*fresh credential*).
+
+2. **Pengajuan Permohonan:**
+   Aplikasi mengirim permohonan reset ke backend:
+   ```http
+   POST /api/customer/pin-reset-requests
+   Content-Type: application/json
+   Authorization: Bearer <sanctum-token>
+
+   {
+     "id_token": "<fresh-firebase-id-token>"
+   }
+   ```
+   Status permohonan menjadi `pending`. Selama tahap ini, penarikan dana dibekukan (`422 pin_reset_in_progress`).
+
+3. **Persetujuan Admin Bank:**
+   Siswa melapor ke admin bank sekolah untuk verifikasi fisik. Admin menyetujui permohonan di panel web (`/pin-reset-requests`). Status beralih menjadi `approved`.
+
+4. **Masa Tunggu 24 Jam (*Cooldown Period*):**
+   Setelah disetujui, masa tunggu 24 jam (`available_at`) mulai berjalan demi mencegah pembajakan akun. Layar `/pin-reset` menampilkan penghitung waktu mundur (*countdown*) yang diperbarui secara langsung. Siswa dapat membatalkan permohonan kapan saja (`POST /api/customer/pin-reset-requests/{id}/cancel`).
+
+5. **Pemasukan PIN Baru:**
+   Setelah masa tunggu selesai (`ready: true`), keypad PIN terbuka kembali. Siswa memasukkan 6 digit PIN baru beserta konfirmasinya:
+   ```http
+   POST /api/customer/pin-reset-requests/{id}/complete
+   Content-Type: application/json
+   Authorization: Bearer <sanctum-token>
+
+   {
+     "pin": "654321",
+     "pin_confirmation": "654321"
+   }
+   ```
+   Setelah berhasil (status **200 OK**), PIN baru aktif, pembekuan penarikan dicabut, dan sesi aplikasi langsung terbuka (`ready`).
+
+</Steps>

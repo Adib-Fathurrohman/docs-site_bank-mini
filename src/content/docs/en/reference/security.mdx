@@ -6,6 +6,7 @@ sidebar:
 sources:
   - docs/PIN_VERIFICATION.md
   - docs/AUTH.md
+  - docs/CUSTOMER_AUTH.md
   - docs/RBAC.md
   - docs/BACKEND_CHECKPOINT.md
 ---
@@ -17,11 +18,13 @@ import { Aside } from '@astrojs/starlight/components';
 | Protection | Implementation |
 | --- | --- |
 | Staff passwords and customer PINs | bcrypt hash (`BCRYPT_ROUNDS=12`), never in responses |
-| API tokens | Sanctum tokens stored hashed; the plain token is returned only once at login |
-| Lifetime | 8 hours from creation, absolute, no refresh |
-| Revocation | Logout revokes the token used; blocking/deleting staff and closing an account revoke all their tokens |
-| Login throttling | 5 attempts per minute per username/identifier + IP |
-| Login messages | Customers: a generic message for a wrong identifier or PIN; remaining attempts are not shown |
+| Customer credentials | Handled by Firebase Authentication (Google/Email). The backend never stores or handles customer passwords |
+| Firebase token verification | The `KreaitFirebaseAuth` adapter verifies signatures, audience, issuer, expiry, and checks revocation / disabled state |
+| API tokens | Sanctum tokens stored hashed; the plain token is returned only once at login/activation |
+| Session lifetimes | Staff: 8 hours (`SANCTUM_EXPIRATION`). Customer: 30 days (`CUSTOMER_SESSION_MINUTES`) |
+| Revocation | Single-device logout via `POST /logout`; global customer logout via `POST /logout-all`; account deactivation disables the Firebase user and purges tokens |
+| Rate limiting | Staff: 5/min per username + IP. Customer: 30/min per IP for Firebase login, 20/min per IP for activation, 5/min per customer for unlock & PIN setup |
+| Anti-enumeration | Generic messages prevent NIS and email probing during login and activation (`activation_mismatch`) |
 | No cookies | No sessions or cookies in the API, so CSRF does not apply |
 
 ## Authorization

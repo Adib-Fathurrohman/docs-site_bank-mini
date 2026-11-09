@@ -1,0 +1,48 @@
+---
+title: Audit & Reports Screens
+description: Guide to the audit web interface — transaction audit trails, double-entry general journal, trial balances, and official PDF report exports.
+sidebar:
+  order: 5
+sources:
+  - bank_mini/front-end/src/features/audit/AuditLogPage.tsx
+  - bank_mini/front-end/src/features/audit/AuditTransactionPage.tsx
+  - bank_mini/front-end/src/features/audit/JournalPage.tsx
+  - bank_mini/front-end/src/features/audit/ExportsPage.tsx
+  - bank_mini/front-end/src/features/audit/components/AuditTable.tsx
+  - bank_mini/front-end/src/features/audit/queries.ts
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Audit screens (`/audit/*` and `/reports`) are accessible by **Administrator** and **Supervisor** roles to inspect financial integrity and produce statutory documents.
+
+## 1. Transaction Audit Trail (`/audit/transactions`)
+
+Provides complete end-to-end traceability for every ledger movement (`GET /api/audit/transactions`):
+- **Search Filters:**
+  - Date ranges (`from` and `to`, supporting `YYYY-MM-DD` and `YYYY-MM-DD HH:MM`).
+  - Transaction types: Cash deposit (`deposit`), Cash withdrawal (`withdrawal`), Deposit correction (`deposit_correction`), or Withdrawal correction (`withdrawal_correction`).
+  - Minimum amount (`min_amount`).
+  - Teller selector.
+- **Audit Table:** Details timestamp, transaction ID, teller name, student customer name & account number, movement type, amount, and running balance.
+- **Transaction Detail (`/audit/transactions/:id`):** Reveals complete audit linkages, including associated daily shift reports, reversal pairs (if corrected), authorizing supervisor signatures, and double-entry journal lines.
+- **PDF Export:** An **Export PDF** button downloads the official audit log document.
+
+## 2. Double-Entry General Journal (`/audit/journals`)
+
+Inspects accounting entries generated for financial transactions (`GET /api/audit/journals`):
+- Every transaction writes two matching lines: one Debit and one Credit.
+- Standard school bank chart of accounts:
+  - **101 (Cash):** Debited on deposits, credited on withdrawals.
+  - **201 (Customer Savings):** Bank liability to students. Credited on deposits, debited on withdrawals.
+- Filter by date range and account code.
+- **Export Journal PDF** button downloads the formatted general journal.
+
+## 3. Reports Export Center (`/reports`)
+
+Central hub for generating school financial reports:
+- **Bank Mini Annual Report (`GET /api/reports/annual`):** Formal annual document detailing executive summaries, total deposits and withdrawals, customer breakdowns per academic major, and balance sheets.
+- **Trial Balance:** Verifies equal total debit and credit balances over specified periods.
+- **Customer Statement Export:** Generates official account statements for any student (`GET /api/customers/{id}/statement`).
+
+Related: [Audit trail & accounting concept](/en/concepts/audit-trail/) · [Audit & Reports API reference](/en/api/audit-and-reports/)

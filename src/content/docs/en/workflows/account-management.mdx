@@ -7,8 +7,10 @@ sources:
   - app/Http/Controllers/API/Admin/CustomerController.php
   - app/Http/Controllers/API/Admin/StaffController.php
   - app/Services/CustomerService.php
+  - app/Services/PinService.php
   - app/Services/StaffImportService.php
   - docs/WORKFLOWS.md
+  - docs/CUSTOMER_AUTH.md
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -20,10 +22,11 @@ account and staff lists but cannot change them.
 ## Customer account lifecycle
 
 <Mermaid
-	caption="Account statuses. A closed account cannot be restored through the API."
+	caption="Account status and mobile app activation state."
 	chart={`stateDiagram-v2
   direction LR
-  [*] --> active: admin opens the account (balance 0)
+  [*] --> active: admin opens account (balance 0, activation: pending)
+  active --> active: student activates via Firebase + NIS (activation: activated)
   active --> suspended: admin suspends
   suspended --> active: admin reactivates
   active --> inactive: admin closes (graduation)
@@ -31,6 +34,7 @@ account and staff lists but cannot change them.
   inactive --> [*]
   note right of inactive
     soft delete · tokens revoked
+    Firebase user disabled
     history kept
   end note`}
 />
@@ -41,33 +45,58 @@ account and staff lists but cannot change them.
 | --- | --- |
 | Endpoint | `POST /api/admin/customers` |
 | Preconditions | The major exists (`GET /api/majors`) |
-| Input | `nis`, `full_name`, `class` (`X`/`XI`/`XII`), `major_id`, `group` (`1`–`4`), `pin` (6 digits) |
-| Process | `CustomerService::create` generates `{CODE}-{YEAR}-{SERIAL}` (retries up to 3 times on a collision) |
-| Database effect | A `customers` row: status `active`, balance `0`, PIN hashed |
-| Response | `201` Customer |
-| Failures | `422` validation (NIS already used, including closed accounts); `403` not an admin |
+| Input | `nis`, `full_name`, `email` (required, unique), `class` (`X`/`XI`/`XII`), `major_id`, `group` (`1`–`4`) |
+| PIN rule | Admins **never set PINs**. Sending `pin` is refused (`422`). Students create their own PIN in the app |
+| Process | `CustomerService::create` generates `{CODE}-{YEAR}-{SERIAL}` |
+| Database effect | A `customers` row: status `active`, activation `pending`, balance `0`, `pin` null |
+| Response | `201` Customer (`activation_status: "pending"`, `pin_set: false`) |
+| Failures | `422` validation (NIS or email already taken, including closed accounts); `403` not an admin |
 
-The opening balance is always `0`. Money only enters through a teller. The fields
-`account_number`, `account_status` and `balance` in the body are ignored.
+The opening balance is always `0`. Cash can be deposited at the counter immediately even before the student activates the mobile app.
 
-### Editing, suspending, resetting the PIN
+### Importing customers from old bookkeeping
+
+| | |
+| --- | --- |
+| Endpoint | `POST /api/admin/customers/import` |
+| Input | `file` (required, `.xlsx`/`.csv`), `transactions_file` (optional, or a `Transaksi` sheet) |
+| Capacity | Up to 1,000 customers and 10,000 historical transaction rows |
+| Customer columns | NIS, Name, Email (optional), Class, Major, Group, Balance (optional), Account Number (optional) |
+| Transaction columns | NIS, Date, Type (`deposit`/`withdrawal`), Amount, Note |
+| Opening balance | Any balance not explained by transactions becomes an opening deposit (*"Saldo awal dari pembukuan lama"*) |
+| Database effect | Bulk `customers` creation; transactions linked to `customer_imports` (`daily_report_id: null`) |
+| Atomicity | All or nothing: fails completely on invalid formatting, duplicate NIS, or negative balance |
+
+
+### Editing data and suspending an account
 
 | | |
 | --- | --- |
 | Endpoint | `PUT\|PATCH /api/admin/customers/{id}` |
-| Input | Any subset of `nis`, `full_name`, `class`, `major_id`, `group`, `account_status` (`active`/`suspended` only), `pin` |
-| Effect | When `pin` is sent, `pin_failed_attempts` and `pin_locked_until` are reset too (the PIN lock is lifted) |
+| Input | Any subset of `nis`, `full_name`, `email`, `class`, `major_id`, `group`, `account_status` (`active`/`suspended` only) |
+| Email rule | `email` can only be updated while activation is `pending`. Once activated, email is locked (`422`) |
+| PIN rule | Sending `pin` is refused (`422`) — use the dedicated PIN reset endpoint |
 | Cannot change | Account number and balance. Changing the major does not change the number |
-| Failures | `422` (e.g. `account_status: inactive`); `404` the account is closed |
+| Failures | `422` validation; `404` account is closed |
 
-Suspending an account does not revoke the customer's tokens.
+Suspending an account does not revoke existing customer tokens, but prevents any withdrawals.
+
+### Resetting customer PIN
+
+| | |
+| --- | --- |
+| Endpoint | `POST /api/admin/customers/{id}/pin-reset` |
+| When to use | Customer forgot their PIN |
+| Effect | Clears `pin`, sets `pin_failed_attempts = 0`, and clears `pin_locked_until` (lifts any lock) |
+| Next step | Customer signs into the app via Firebase, then sets up a new PIN via `POST /api/customer/pin/setup` |
+| Response | `200` with updated Customer object (`pin_set: false`) |
 
 ### Closing an account (graduation)
 
 | | |
 | --- | --- |
 | Endpoint | `POST /api/admin/customers/{id}/deactivate` |
-| Process | One database transaction: status `inactive`, delete all customer tokens, soft delete |
+| Process | One database transaction: status `inactive`, delete all customer tokens, disable user in Firebase, soft delete |
 | Validation | No balance check |
 | Effect | `deleted_at` is set. Transactions and journal lines are untouched |
 | Failures | `404` if already closed |

@@ -24,9 +24,9 @@ withdrawal. The teller **never** sees, types or sends the PIN, and the customer 
 | | |
 | --- | --- |
 | Actors | Teller (creates and completes), customer (approves with the PIN or rejects) |
-| Preconditions | Mode `mobile`/`both`; the teller has a shift dated today; account `active`; PIN not locked; balance − amount ≥ minimum balance; no open request of this teller and none for this customer |
+| Preconditions | Mode `mobile`/`both`; the teller has a shift dated today; account `active`; customer has activated the app and set up a PIN (refused with `422 customer_app_not_activated` if unactivated, or `422 pin_not_set` if PIN not set); PIN not locked; balance − amount ≥ minimum balance; no open request of this teller and none for this customer |
 | Time limits | 120 seconds to approve, then 120 seconds to complete |
-| Updates | Polling (no push) |
+| Updates | Push notification (FCM) to customer device + fallback polling |
 | Result | One `withdrawal` transaction per request, never more |
 
 ## The full sequence
@@ -41,11 +41,13 @@ withdrawal. The teller **never** sees, types or sends the PIN, and the customer 
   T->>A: POST /teller/withdrawal-authorizations {account_number, amount}
   Note over A: check shift, status, PIN lock,<br/>minimum balance, open requests
   A-->>T: 201 {id, status: pending, expires_at, server_time}
-  loop about every 2 s
+  Note over A: Push FCM sent asynchronously (defer)<br/>to customer device tokens
+  A--)N: FCM Notification {id, title: "Permintaan penarikan"}
+  loop about every 2 s (or notification tap)
     T->>A: GET /teller/withdrawal-authorizations/{id}
     A-->>T: status: pending
   end
-  N->>A: GET /customer/withdrawal-authorizations (polling)
+  N->>A: GET /customer/withdrawal-authorizations (or open detail)
   A-->>N: amount, teller name, balance, balance after
   N->>A: POST /customer/withdrawal-authorizations/{id}/approve {pin}
   Note over A: PinService::verify<br/>pending → approved
@@ -208,8 +210,7 @@ Calling `complete` again after a timeout returns **the same** transaction with s
 
 ## Known limitations
 
-- **Polling only (L19).** The customer must open the app or refresh to see a new
-  request.
+- **FCM push notifications & polling fallback.** FCM push notifications are dispatched when a request is created. If the customer device is offline, has notifications disabled, or has not yet registered a token, the mobile app still discovers open requests via periodic polling.
 - **Customer tokens have no abilities (L20).** Any device where the customer is logged
   in can approve.
 - **Account closed mid-flow (L21).** If an admin closes the account between approval

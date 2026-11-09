@@ -1,65 +1,70 @@
 ---
-title: Login and sessions
-description: The single login gateway for staff and customers, using the token, expiry, logout, and responses when access is refused.
+title: Authentication and session
+description: Single login gateway for staff and customers (Firebase), account activation, PIN creation, token expiry, app unlock, and logout.
 sidebar:
   order: 1
 sources:
   - app/Http/Controllers/API/LoginController.php
   - app/Http/Controllers/API/Staff/AuthController.php
   - app/Http/Controllers/API/Customer/AuthController.php
+  - app/Http/Controllers/API/Customer/ActivationController.php
+  - app/Services/CustomerAuthService.php
+  - app/Services/CustomerActivationService.php
   - app/Providers/AppServiceProvider.php
   - docs/AUTH.md
+  - docs/CUSTOMER_AUTH.md
 ---
 
 import { Aside, Steps } from '@astrojs/starlight/components';
 import Mermaid from '../../../../components/Mermaid.astro';
 
-## Summary
+## Overview
 
 | | |
 | --- | --- |
 | Actors | All staff and customers |
-| Endpoint | `POST /api/login` (aliases: `/api/staff/login`, `/api/customer/login`) |
-| Mechanism | Laravel Sanctum personal access tokens (bearer), stored hashed in `personal_access_tokens` |
-| Lifetime | 480 minutes (8 hours) from creation, absolute. No refresh endpoint |
-| Cookies / sessions | Not used |
+| Entry endpoints | `POST /api/login`, `/api/staff/login`, `/api/customer/auth/login`, `/api/customer/activation` |
+| Mechanism | Laravel Sanctum personal access bearer tokens, stored hashed in `personal_access_tokens` |
+| Customer auth | Firebase Authentication (Google OAuth or Email/Password) client SDK, verified by server adapter |
+| Session lifetimes | **Staff:** 480 minutes (8 hours) absolute. **Customer:** 43,200 minutes (30 days) via `CUSTOMER_SESSION_MINUTES` |
+| Cookies / sessions | None (stateless API) |
 
-## Login flow
+## Login gateway flow
 
 <Mermaid
-	caption="The body decides between staff and customer login."
+	caption="The POST /api/login gateway inspects credentials."
 	chart={`flowchart TD
-  A["POST /api/login"] --> RL{"Rate limit<br/>5/min per identity + IP"}
+  A["POST /api/login"] --> RL{"Rate limit"}
   RL -- "exceeded" --> E429["429 Too Many Attempts."]
-  RL -- "ok" --> B{"username filled?"}
+  RL -- "ok" --> B{"username present?"}
   B -- "yes" --> S["Staff login<br/>bcrypt + is_active"]
-  B -- "no" --> C{"identifier filled?"}
-  C -- "yes" --> N["Customer login<br/>PinService::verify (shared lock)"]
-  C -- "no" --> E422["422 send username and password<br/>or NIS/account and PIN"]
+  B -- "no" --> C{"id_token present?"}
+  C -- "yes" --> N["Customer login<br/>Verify Firebase ID token"]
+  C -- "no" --> E422["422 Provide username/password (staff)<br/>or sign in with Google/email (customer)"]
   S -- "success" --> T1["200 actor: staff · token · user"]
-  N -- "success" --> T2["200 actor: customer · token · customer"]
+  N -- "linked" --> T2["200 actor: customer · token · expires_at · customer"]
+  N -- "not activated" --> N_LINK["403 code: account_not_linked"]
   S -- "failure" --> F1["422 errors.username"]
-  N -- "failure" --> F2["422 errors.identifier"]`}
+  N -- "bad/revoked token" --> F2["401 code: firebase_token_invalid"]`}
 />
 
 <Steps>
 
-1. The client sends **one** set of credentials:
+1. Client sends **one** credential set:
 
    ```json title="Staff"
    { "username": "teller", "password": "password" }
    ```
 
-   ```json title="Customer (NIS or account number)"
-   { "identifier": "20260001", "pin": "123456" }
+   ```json title="Customer (Firebase ID Token)"
+   { "id_token": "<firebase-id-token>" }
    ```
 
-2. The backend checks the credentials. For customers the account number is tried
-   first, then the NIS; both lead to the same PIN counter.
+2. For staff, the backend checks bcrypt passwords and ensures `is_active = true`. For customers, the server verifies token signatures, audience, account status, and maps the `firebase_uid` to the customer record.
 
-3. On success the backend creates a token and returns it **only once**:
+3. On success, the backend creates a Sanctum token:
 
-   ```json title="200 — example response from the demo database (token shortened)"
+   ```json title="200 (staff)"
    {
      "data": {
        "actor": "staff",
@@ -70,72 +75,99 @@ import Mermaid from '../../../../components/Mermaid.astro';
    }
    ```
 
-   For customers, `actor` is `"customer"` and the profile is in `data.customer`.
+   ```json title="200 (customer)"
+   {
+     "data": {
+       "actor": "customer",
+       "token": "12|5pJ…",
+       "token_type": "Bearer",
+       "expires_at": "2026-12-02T02:00:00.000000Z",
+       "customer": {
+         "id": 1,
+         "account_number": "RPL-2026-001",
+         "nis": "20260001",
+         "full_name": "Budi Santoso",
+         "email": "budi.santoso@example.test",
+         "activation_status": "activated",
+         "pin_set": true,
+         "account_status": "active",
+         "balance": 500000
+       }
+     }
+   }
+   ```
 
-4. The client opens the portal for `data.actor`, then for `data.user.role` (staff).
+4. The client routes the user according to `data.actor` and role.
 
 </Steps>
 
-## Login refusals (`422`)
+## First-time customer activation flow
 
-| Message | Cause |
-| --- | --- |
-| `Username atau password salah.` | Unknown username or wrong password |
-| `Akun staf ini sudah dinonaktifkan.` | Correct password but the staff member is blocked |
-| `NIS/nomor rekening atau PIN salah.` | Unknown identifier, wrong PIN, or a closed account. Remaining attempts are **not** shown |
-| `Terlalu banyak percobaan PIN salah. Coba lagi pukul HH:MM.` | The PIN is locked (3 wrong in a row anywhere). Local time |
-| `Rekening ini sudah tidak aktif.` | An `inactive` account that is not soft-deleted; only after a correct PIN (practically unreachable through API flows) |
-| `Isi username dan password (staf) atau NIS/nomor rekening dan PIN (nasabah).` | Neither credential set was sent |
+Students do not manage a local password for Bank Mini. The admin creates the account with the student's email, and the student activates the app themselves:
 
-**Suspended** accounts can still log in.
+<Mermaid
+	caption="Customer account activation and initial PIN setup."
+	chart={`sequenceDiagram
+  autonumber
+  actor Student
+  participant App as Mobile App (Expo)
+  participant FB as Firebase Auth
+  participant API as Laravel Backend
+  Student->>App: Opens app, signs in with Google / Email
+  App->>FB: Authenticate user
+  FB-->>App: ID Token (verified email)
+  App->>API: POST /api/customer/auth/login {id_token}
+  API-->>App: 403 code: account_not_linked
+  App->>Student: Prompts for NIS
+  Student->>App: Inputs NIS
+  App->>API: POST /api/customer/activation {nis, id_token}
+  Note over API: Matches NIS with verified email.<br/>Binds firebase_uid permanently.
+  API-->>App: 200 OK (Sanctum token, pin_set: false)
+  App->>Student: Prompts to create 6-digit PIN
+  Student->>App: Inputs & confirms PIN
+  App->>API: POST /api/customer/pin/setup {id_token, pin, pin_confirmation}
+  API-->>App: 201 Created (PIN saved)
+  App->>Student: Lands on account dashboard`}
+/>
 
-## Using the token
+## App session unlock
+
+Because customer sessions last up to 30 days (`CUSTOMER_SESSION_MINUTES`), the mobile app locks its UI when backgrounded or closed.
+
+- Reopening the app prompts for the 6-digit PIN and verifies it via `POST /api/customer/unlock` `{pin}`.
+- Three consecutive failures lock the PIN for 15 minutes (`pin_locked_until`).
+- App unlock is a client-side gate to protect an unattended phone; the Sanctum token remains valid for API calls.
+
+## Using tokens and logging out
+
+Pass the token on every request:
 
 ```http
-GET /api/teller/shift
+GET /api/customer/me
 Accept: application/json
 Authorization: Bearer <token>
 ```
 
-On every request the token owner is reloaded from the database. Blocking a staff
-member, changing a role or closing an account takes effect immediately.
-
-| Actor | Own profile | Logout |
-| --- | --- | --- |
-| Staff | `GET /api/staff/me` | `POST /api/staff/logout` |
-| Customer | `GET /api/customer/me` | `POST /api/customer/logout` |
-
-Logout revokes only the token used for that request; other devices stay logged in. The
-server also revokes tokens when an admin blocks or deletes a staff member, or closes a
-customer account.
-
-## When access is refused
-
-| Status | Message | Meaning | Client action |
+| Actor | Profile | Logout (this device) | Logout (all devices) |
 | --- | --- | --- | --- |
-| `401` | `Unauthenticated.` | Missing, invalid, revoked or expired token | Delete the token, show login |
-| `403` | `Fitur ini khusus untuk staf bank.` | Customer token on a staff endpoint | Delete the token, show login |
-| `403` | `Fitur ini khusus untuk nasabah.` | Staff token on a customer endpoint | Delete the token, show login |
-| `403` | `Akun staf ini sudah dinonaktifkan.` | Staff member blocked while logged in | Delete the token, show login with the message |
-| `403` | `Rekening ini sudah tidak aktif.` | Customer account closed | Delete the token, show login |
-| `403` | `Peran Anda tidak memiliki akses ke fitur ini.` | Wrong staff role for the endpoint | Return to login (UKK rubric 3.2) |
+| Staff | `GET /api/staff/me` | `POST /api/staff/logout` | — |
+| Customer | `GET /api/customer/me` | `POST /api/customer/logout` | `POST /api/customer/logout-all` |
 
-API routes never redirect; guests always get a JSON `401`.
+- `POST /api/customer/logout` revokes only the active token on the current device.
+- `POST /api/customer/logout-all` revokes **all** Sanctum tokens for that customer across all devices.
 
-## Storing the token in clients
+## Refusal codes
 
-<Aside type="tip" title="Recommendations from the backend documentation">
-- **Staff web:** keep it in memory and `sessionStorage` (cleared when the tab closes),
-  which suits shared counter computers. Re-validate with `GET /api/staff/me` when the
-  app loads.
-- **Expo:** store it with `expo-secure-store` (Keychain / Android Keystore), not
-  `AsyncStorage`. Never store the PIN.
-</Aside>
+| Status | Code / Message | Meaning | Client action |
+| --- | --- | --- | --- |
+| `401` | `Unauthenticated.` | Token missing, invalid, or expired | Delete stored token, show login |
+| `401` | `firebase_token_invalid` | Firebase session expired or invalid | Re-authenticate with Firebase |
+| `403` | `account_not_linked` | Firebase user not yet bound to an account | Direct to NIS activation screen |
+| `403` | `activation_mismatch` | NIS does not match registered email | Display activation error message |
+| `403` | `Fitur ini khusus untuk staf bank.` | Customer token on staff endpoint | Clear token, show login |
+| `403` | `Fitur ini khusus untuk nasabah.` | Staff token on customer endpoint | Clear token, show login |
+| `403` | `Akun staf ini sudah dinonaktifkan.` | Staff blocked | Clear token, show login |
+| `403` | `Rekening ini sudah tidak aktif.` | Customer account closed | Clear token, show login |
+| `422` | `pin_not_set` | Customer has not set up a PIN | Direct to PIN setup screen |
 
-## Not available
-
-Token refresh or sliding sessions · "remember me" options · forgot password or PIN ·
-staff changing their own password · listing or revoking other devices' sessions ·
-two-factor authentication.
-
-Full endpoints: [Authentication API](/en/api/authentication/).
+Full reference: [Authentication API](/en/api/authentication/).

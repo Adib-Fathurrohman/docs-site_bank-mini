@@ -1,0 +1,66 @@
+---
+title: Supervisor Screens
+description: Guide to the supervisor web interface — operational dashboard, reviewing teller daily reports, approve/hold/reject decisions, and the main vault ledger.
+sidebar:
+  order: 3
+sources:
+  - bank_mini/front-end/src/features/supervisor/SupervisorDashboard.tsx
+  - bank_mini/front-end/src/features/supervisor/ReportsPage.tsx
+  - bank_mini/front-end/src/features/supervisor/ReportReviewPage.tsx
+  - bank_mini/front-end/src/features/supervisor/VaultPage.tsx
+  - bank_mini/front-end/src/features/supervisor/components/ReportTable.tsx
+  - bank_mini/front-end/src/features/supervisor/components/ReviewPanel.tsx
+  - bank_mini/front-end/src/features/supervisor/queries.ts
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+The supervisor interface (`/supervisor/*`) is centered on controlling teller counter cash flows, verifying daily reports, and overseeing the school's central bank vault.
+
+## 1. Operational Dashboard (`/supervisor`)
+
+Provides real-time visibility across branch operations:
+- Metric cards: currently open shifts, reports awaiting review (`submitted`), and reports on hold (`on_hold`).
+- Total live cash held across active teller drawers versus central vault holdings.
+- Quick navigation to review queues and vault transfers.
+
+## 2. Reviewing Daily Reports (`/supervisor/reports`)
+
+Lists all teller shift records (`GET /api/supervisor/daily-reports`):
+- Filter options: All, Awaiting Review (`submitted`), On Hold (`on_hold`), Approved (`approved`), and Rejected (`rejected`).
+- Date picker filter.
+- Columns detail teller name, date, opening cash, transaction volume, system balance, reported physical cash, and cash discrepancy.
+- Rows with discrepancies highlight differences in yellow or red alert badges.
+
+## 3. Report Review Detail (`/supervisor/reports/:id`)
+
+Clicking a shift row navigates to the detailed audit view:
+
+<Steps>
+
+1. **Denomination Breakdown:** Compares physical opening cash counts against closing cash counts.
+2. **Shift Transactions:** Displays all deposits, withdrawals, and supervisor-authorized corrections executed during the shift.
+3. **Supervisor Decision (Action Panel):**
+   - **Approve:** Submits `POST /api/supervisor/daily-reports/{id}/approve`. Status transitions to `approved`. The backend immediately triggers an atomic cash transfer from the teller's drawer to the main vault (`cash_transfers`).
+   - **Hold:** Submits `POST .../hold`. Used when the supervisor needs to investigate a physical discrepancy without invalidating the shift. Supervisor notes are mandatory.
+   - **Reject:** Submits `POST .../reject`. Status becomes `rejected`. The teller must recount their physical cash, update counts, and resubmit. Supervisor explanation notes are required.
+4. **PDF Export:** Download the formal signed daily report PDF via `GET /api/supervisor/daily-reports/{id}/export`.
+
+</Steps>
+
+## 4. Main Vault Ledger (`/supervisor/vault`)
+
+Tracks physical cash custody transfers into the school's central safe:
+- Sourced from `GET /api/supervisor/cash-transfers`.
+- Every entry originates from an `approved` teller daily report.
+- Details transfer timestamp, report ID, depositor teller, transfer amount, and approving supervisor.
+- Cumulative vault balance is tallied automatically from historical transfers.
+
+## 5. PIN Reset Requests Monitoring (`/pin-reset-requests`)
+
+Supervisors have read-only visibility into the list of self-service PIN reset requests initiated by mobile customers:
+- Monitors pending and approved requests across all customers.
+- Reviews admin decision notes and completion timestamps for operational compliance.
+- Decision action buttons (Approve/Reject) are restricted to administrators and hidden or disabled for supervisors.
+
+Related: [Shift management workflow](/en/workflows/shift-management/) · [Supervisor role](/en/roles/supervisor/) · [Supervisor API reference](/en/api/supervisor/)

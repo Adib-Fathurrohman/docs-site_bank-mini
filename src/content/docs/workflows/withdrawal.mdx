@@ -39,7 +39,7 @@ untuk memakai Mode B.
 | | |
 | --- | --- |
 | Aktor | Teller, dengan nasabah yang mengetik PIN |
-| Prasyarat | Seperti setoran; mode `terminal`/`both`; PIN tidak diblokir; saldo − nominal ≥ saldo minimum |
+| Prasyarat | Seperti setoran; mode `terminal`/`both`; nasabah sudah membuat PIN (ditolak `422 pin_not_set` jika belum); PIN tidak diblokir; saldo − nominal ≥ saldo minimum |
 | Endpoint | `POST /api/teller/withdrawals` |
 | Input | `account_number`, `amount`, `pin` (tepat 6 digit), header opsional `Idempotency-Key` |
 

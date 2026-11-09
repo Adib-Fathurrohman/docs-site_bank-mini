@@ -1,0 +1,88 @@
+---
+title: Layar Administrator
+description: Panduan antarmuka administrator — pengelolaan pengaturan bank, manajemen staf & impor spreadsheet, pembukaan rekening, reset PIN, dan kelulusan siswa.
+sidebar:
+  order: 4
+sources:
+  - bank_mini/src/features/admin/AdminDashboard.tsx
+  - bank_mini/src/features/admin/SettingsPage.tsx
+  - bank_mini/src/features/admin/CustomerFormPage.tsx
+  - bank_mini/src/features/admin/CustomerImportPage.tsx
+  - bank_mini/src/features/admin/CustomerCardPage.tsx
+  - bank_mini/src/features/admin/PinResetRequestsPage.tsx
+  - bank_mini/src/features/admin/StaffFormPage.tsx
+  - bank_mini/src/features/admin/StaffImportPage.tsx
+  - bank_mini/src/features/admin/GraduationPage.tsx
+  - bank_mini/src/features/directory/CustomersPage.tsx
+  - bank_mini/src/features/directory/CustomerDetailPage.tsx
+  - bank_mini/src/features/directory/StaffPage.tsx
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Antarmuka administrator (`/admin/*`, `/customers/*`, `/staff/*`) memegang kendali penuh atas data master, konfigurasi kebijakan bank, dan siklus akun siswa maupun staf.
+
+## 1. Pengaturan Bank (`/admin/settings`)
+
+Admin dapat menyesuaikan 3 kebijakan utama sistem tanpa mengubah kode program:
+- **Saldo Minimum (`min_balance`):** Batas saldo yang tidak boleh ditarik (bawaan Rp10.000).
+- **Mode Pemindai QR (`qr_scanner_mode`):** `webcam` (kamera perangkat), `usb` (pemindai fisik barcode USB), atau `disabled`.
+- **Mode Verifikasi Penarikan (`withdrawal_verification`):**
+  - `mobile`: Penarikan wajib disetujui nasabah di aplikasi ponsel sendiri (Mode A).
+  - `terminal`: Nasabah mengetik PIN di terminal loket teller (Mode B).
+  - `both`: Teller dapat memilih Mode A atau Mode B.
+
+## 2. Manajemen Rekening Nasabah (`/customers`)
+
+### Pendaftaran rekening baru (`/customers/new`)
+Formulir pembukaan rekening mewajibkan pengisian:
+- **NIS** (Nomor Induk Siswa unik).
+- **Nama Lengkap**.
+- **Email Siswa:** Wajib diisi dan valid. Siswa akan menggunakan email ini untuk login akun Firebase dan mengaktifkan aplikasi mobile.
+- **Kelas & Jurusan:** Pilihan tingkat (X, XI, XII), jurusan yang aktif, dan rombel/kelompok (1–4).
+- **Catatan PIN:** Formulir **tidak memiliki input PIN**. PIN dibuat secara mandiri oleh nasabah di aplikasi setelah aktivasi.
+
+### Impor nasabah dari pembukuan lama (`/customers/import`)
+Layar migrasi untuk memasukkan data nasabah lama sekaligus dari spreadsheet:
+- **Unggah berkas:** Mendukung `.xlsx` dan `.csv` (maks. 5 MB, hingga 1.000 nasabah). Kolom dikenali secara otomatis (NIS, Nama, Email, Kelas, Jurusan, Rombel, Saldo, No Rekening).
+- **Riwayat transaksi opsional:** Dapat menyertakan sheet `Transaksi` dalam berkas yang sama atau berkas terpisah (maks. 10.000 baris). Selisih saldo otomatis dicatat sebagai setoran saldo awal.
+- **Deteksi error per baris:** Jika terdapat baris yang salah (misal NIS duplikat atau saldo negatif), sistem menampilkan tabel error per baris dan membatalkan seluruh transaksi secara atomik (*all-or-nothing*).
+- **Penyaring Email:** Pada daftar nasabah (`/customers`), admin dapat memfilter akun dengan opsi `email=missing` untuk melengkapi email siswa yang belum terisi saat impor agar siswa dapat mengaktifkan aplikasi.
+
+### Detail & Tindakan Rekening (`/customers/:id`)
+Halaman detail nasabah menyajikan data saldo, jurusan, riwayat transaksi singkat, dan tombol tindakan:
+- **Cetak Kartu (`/customers/:id/card`):** Menampilkan kartu nasabah lengkap dengan kode QR siap cetak.
+- **Tangguhkan / Aktifkan Kembali:** Mengubah status perbankan antara `active` dan `suspended`.
+- **Reset PIN:** Jika nasabah lupa PIN, admin mengklik tombol **Reset PIN** (`POST /api/admin/customers/{id}/pin-reset`). PIN nasabah dan status blokir dihapus, dan nasabah dapat membuat PIN baru saat login ke aplikasi. Tindakan ini juga otomatis membatalkan permohonan reset mandiri yang sedang berjalan.
+- **Peringatan Permohonan Aktif:** Jika nasabah memiliki permohonan reset mandiri yang masih berjalan, halaman detail menampilkan banner peringatan bahwa penarikan dana sedang dibekukan (`pin_reset_in_progress`).
+- **Tutup Rekening:** Menonaktifkan rekening, mencabut seluruh sesi token Sanctum, menonaktifkan pengguna di Firebase, dan melakukan soft delete.
+
+### Kelulusan Siswa Massal (`/admin/graduation`)
+Layar khusus untuk memproses penutupan rekening siswa kelas XII yang lulus sekolah:
+- Menyaring daftar siswa kelas XII aktif beserta sisa saldo tabungan masing-masing.
+- Membantu admin memastikan seluruh sisa saldo telah diambil di loket sebelum rekening ditutup secara massal.
+
+## 3. Permohonan Reset PIN Mandiri (`/pin-reset-requests`)
+
+Layar khusus untuk meninjau permohonan reset PIN yang diajukan secara mandiri oleh siswa melalui aplikasi mobile (`GET /api/pin-reset-requests`):
+
+- **Penyaring Status:** Mendukung pemfilteran berdasarkan status: `Menunggu` (`pending`), `Disetujui` (`approved`), `Ditolak` (`rejected`), `Selesai` (`completed`), `Dibatalkan` (`cancelled`), `Kedaluwarsa` (`expired`), atau `Semua`.
+- **Notifikasi Dashboard:** Dasbor admin menampilkan banner peringatan dan kartu tugas ketika ada permohonan yang menunggu keputusan.
+- **Dialog Keputusan (Approve / Reject):**
+  - **Setujui (`POST /api/admin/pin-reset-requests/{id}/approve`):** Admin menyetujui permohonan setelah memverifikasi identitas siswa (misalnya memeriksa kartu pelajar fisik atau konfirmasi langsung). Setelah disetujui, masa tunggu 24 jam (*cooldown period*) mulai berjalan sebelum siswa dapat memasukkan PIN baru di aplikasi.
+  - **Tolak (`POST /api/admin/pin-reset-requests/{id}/reject`):** Admin dapat memberikan catatan penolakan (`decision_note`, opsional) jika identitas siswa tidak valid.
+- **Pembekuan Penarikan:** Selama permohonan berstatus `pending` atau `approved`, seluruh transaksi penarikan rekening nasabah dibekukan (`422 pin_reset_in_progress`) untuk mencegah pencurian dana, sementara transaksi setoran tetap diizinkan.
+- **Reset Langsung Alternatif:** Jika siswa datang langsung ke loket sekolah, admin tetap dapat menggunakan tombol instan **Reset PIN** di halaman detail nasabah (`POST /api/admin/customers/{id}/pin-reset`) yang seketika menghapus PIN lama dan otomatis membatalkan permohonan mandiri yang sedang berjalan.
+
+## 4. Manajemen Staf & Impor Spreadsheet (`/staff`)
+
+### Tambah & Ubah Staf (`/staff/new`)
+Admin dapat membuat akun staf baru untuk peran `teller` atau `supervisor`. Input mencakup username, nama lengkap, password (min. 8 karakter), kelas dan nomor WhatsApp.
+
+### Impor Staf Massal (`/staff/import`)
+Membuat banyak akun staf sekaligus melalui berkas spreadsheet `.xlsx` atau `.csv`:
+- Mengunduh contoh template spreadsheet.
+- Mendukung penamaan header berbahasa Indonesia (`Username`, `Nama`, `Kelas`, `No WA`, `Password`, `Peran`).
+- Semua atau tidak sama sekali (*all or nothing*): Jika ada kesalahan validasi pada salah satu baris, sistem menampilkan nomor baris spreadsheet yang salah dan membatalkan seluruh proses.
+
+Terkait: [Manajemen rekening dan staf](/workflows/account-management/) · [Peran Admin](/roles/admin/) · [Referensi API Admin](/api/admin/)

@@ -1,0 +1,66 @@
+---
+title: Layar Supervisor
+description: Panduan antarmuka supervisor — dashboard pengawasan, review laporan harian shift teller, persetujuan dan penolakan, serta buku brankas utama.
+sidebar:
+  order: 3
+sources:
+  - bank_mini/front-end/src/features/supervisor/SupervisorDashboard.tsx
+  - bank_mini/front-end/src/features/supervisor/ReportsPage.tsx
+  - bank_mini/front-end/src/features/supervisor/ReportReviewPage.tsx
+  - bank_mini/front-end/src/features/supervisor/VaultPage.tsx
+  - bank_mini/front-end/src/features/supervisor/components/ReportTable.tsx
+  - bank_mini/front-end/src/features/supervisor/components/ReviewPanel.tsx
+  - bank_mini/front-end/src/features/supervisor/queries.ts
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Antarmuka supervisor (`/supervisor/*`) difokuskan pada pengawasan operasional kasir, verifikasi laporan harian teller, dan pengelolaan brankas utama sekolah.
+
+## 1. Dashboard Pengawasan (`/supervisor`)
+
+Menampilkan gambaran menyeluruh aktivitas bank mini:
+- Kartu ringkasan: Jumlah shift yang sedang terbuka, laporan yang menunggu verifikasi (`submitted`), dan laporan yang sedang ditahan (`on_hold`).
+- Saldo kas berjalan di tangan teller vs saldo di brankas utama.
+- Tombol akses cepat ke daftar laporan dan buku brankas.
+
+## 2. Pemeriksaan Laporan Harian (`/supervisor/reports`)
+
+Halaman ini mencatat semua shift harian teller (`GET /api/supervisor/daily-reports`):
+- Filter status: Semua, Menunggu Review (`submitted`), Ditahan (`on_hold`), Disetujui (`approved`), atau Ditolak (`rejected`).
+- Filter tanggal laporan.
+- Kolom tabel menampilkan nama teller, tanggal, saldo awal kas, jumlah transaksi, saldo sistem, uang fisik penutupan, dan selisih kas.
+- Baris dengan selisih kas fisik diberi penanda peringatan berwarna kuning/merah.
+
+## 3. Layar Review Laporan (`/supervisor/reports/:id`)
+
+Klik pada salah satu laporan untuk membuka layar audit terperinci:
+
+<Steps>
+
+1. **Rincian Perhitungan Fisik:** Membandingkan pecahan uang saat pembukaan shift dan saat penutupan shift.
+2. **Daftar Transaksi Shift:** Memeriksa seluruh setoran, penarikan, dan koreksi yang tercatat selama shift teller tersebut.
+3. **Keputusan Supervisor (Panel Tindakan):**
+   - **Setujui (Approve):** Memanggil `POST /api/supervisor/daily-reports/{id}/approve`. Status berubah menjadi `approved`. Sistem secara otomatis mencatat pemindahan uang fisik dari laci teller ke brankas utama (`cash_transfers`).
+   - **Tahan (Hold):** Memanggil `POST .../hold`. Digunakan jika teller perlu dimintai klarifikasi selisih fisik tanpa membatalkan laporan. Catatan supervisor wajib diisi.
+   - **Tolak (Reject):** Memanggil `POST .../reject`. Status menjadi `rejected`. Teller harus membuka kembali laci kas, menghitung ulang uang fisik, dan mengirimkan laporan ulang. Catatan supervisor wajib diisi.
+4. **Unduh PDF:** Tersedia tombol untuk mengunduh berkas laporan harian resmi (`GET /api/supervisor/daily-reports/{id}/export`).
+
+</Steps>
+
+## 4. Buku Brankas Utama (`/supervisor/vault`)
+
+Menampilkan mutasi penerimaan kas brankas utama sekolah:
+- Data diambil dari `GET /api/supervisor/cash-transfers`.
+- Setiap pemindahan kas berasal dari shift teller yang telah berstatus `approved`.
+- Menampilkan tanggal transfer, nomor laporan harian, nama teller penyetor, nominal uang, dan supervisor yang menyetujui.
+- Saldo brankas utama bertambah secara otomatis sesuai total penerimaan kas.
+
+## 5. Pemantauan Permohonan Reset PIN (`/pin-reset-requests`)
+
+Supervisor memiliki akses lihat saja (*read-only*) ke daftar permohonan reset PIN mandiri yang diajukan oleh nasabah:
+- Memantau permohonan yang berstatus `pending` atau `approved`.
+- Memeriksa catatan keputusan dan riwayat eksekusi admin demi kepatuhan operasional bank.
+- Tombol tindakan Setujui dan Tolak dinonaktifkan untuk peran supervisor.
+
+Terkait: [Alur shift teller](/workflows/shift-management/) · [Peran Supervisor](/roles/supervisor/) · [Referensi API Supervisor](/api/supervisor/)

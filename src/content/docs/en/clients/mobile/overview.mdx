@@ -1,0 +1,124 @@
+---
+title: Getting Started & Android Architecture
+description: Android customer mobile application architecture with React Native & Expo, setup, Firebase configuration, FCM push notifications, and release APK packaging.
+sidebar:
+  order: 1
+sources:
+  - bank-mini-mobile/README.md
+  - bank-mini-mobile/package.json
+  - bank-mini-mobile/app.json
+  - bank-mini-mobile/eas.json
+  - bank-mini-mobile/src/api/client.ts
+  - bank-mini-mobile/src/lib/config.ts
+  - bank-mini-mobile/src/lib/firebase.native.ts
+  - bank-mini-mobile/src/lib/secureStore.ts
+  - bank-mini-mobile/src/push/messaging.native.ts
+  - bank-mini-mobile/DEPLOY.md
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+The Bank Mini customer app is built with **Expo (React Native)** primarily targeting **Android** devices (alongside a web preview build). Students use it to check their savings balance, inspect account transaction statements, show a digital QR card, and receive push notifications to approve counter cash withdrawals (Mode A).
+
+## Technology Stack & Architecture
+
+- **Core Framework:** React Native 0.79, Expo SDK 53, React 19, TypeScript.
+- **Navigation & Routing:** Expo Router 5 (file-based routing under `app/`, bottom tab bar, modal sheets).
+- **Server State & Caching:** TanStack Query 5 (API response caching, automatic invalidation on mutations, polling loops).
+- **Student Authentication:** Firebase Authentication SDK (`@react-native-firebase/auth` on native Android, Firebase Web SDK on web builds).
+- **Push Notifications:** Firebase Cloud Messaging (FCM) with Android background service registration in `index.js`.
+- **Credential Storage:** `expo-secure-store` (Android KeyStore backed). **The customer PIN is never stored** in persistent memory.
+- **QR Rendering:** `react-native-qrcode-svg` rendering the standard card payload (`BANKMINI:{account_number}`).
+
+## Running in Development
+
+<Steps>
+
+1. Navigate to the mobile project directory and install dependencies:
+
+   ```bash
+   cd ../bank-mini-mobile
+   npm install
+   ```
+
+2. Run in a browser (web preview):
+
+   ```bash
+   npm run web
+   ```
+
+   The web preview opens at `http://localhost:8081`.
+
+3. Run on an Android device or emulator:
+
+   Because FCM push notifications depend on the native `@react-native-firebase` package, a development build is required (rather than vanilla Expo Go):
+
+   ```bash
+   # Prebuild the android/ directory
+   npx expo prebuild
+
+   # Compile and launch debug APK on connected USB device or emulator
+   npm run android
+   ```
+
+   > [!NOTE]
+   > Android emulators must run a system image containing **Google Play** so that Google Play Services and FCM function properly.
+
+</Steps>
+
+## Environment Configuration (`.env.local`)
+
+By default without a `.env.local` file, the mobile client connects to the production API: `https://api-bank.rumput.tech/api` (or `http://localhost:8000/api` under `__DEV__`).
+
+For local development on physical devices, create `.env.local` inside `bank-mini-mobile`:
+
+```dotenv
+# Backend Laravel REST API URL (use host LAN IP for physical device testing)
+EXPO_PUBLIC_API_URL=http://192.168.1.10:8000/api
+
+# Firebase Project Configuration (Production)
+EXPO_PUBLIC_FIREBASE_PROJECT_ID=bank-mini-rumput
+EXPO_PUBLIC_FIREBASE_API_KEY=<firebase-web-api-key>
+
+# Optional: Local Firebase Auth Emulator
+# EXPO_PUBLIC_FIREBASE_AUTH_EMULATOR=http://192.168.1.10:9099
+```
+
+> [!TIP]
+> Physical smartphones on Wi-Fi cannot connect to `http://localhost:8000`. Set `EXPO_PUBLIC_API_URL` to your development machine's local LAN IP address.
+
+## Android Firebase & FCM Configuration
+
+- **Application Identifier & Branding:** The Android package name is configured as `tech.rumput.bankmini` in `app.json`. Visual branding includes animated splash transitions (`AnimatedSplash.tsx`) and official bank badges (`LogoMark.tsx`, `Brand.tsx`).
+- **Configuration Files:** `google-services.json` resides at the repository root and is automatically copied to `android/app/google-services.json` during prebuild.
+- **Android 13+ Runtime Permissions:** The app requests `POST_NOTIFICATIONS` runtime permission on initial notification setup or login.
+- **FCM Token Registration:** The device FCM registration token is registered with the backend via `POST /api/customer/push-tokens` and tied to the active Sanctum session.
+
+## Production APK Release
+
+Standalone Android APK binaries can be compiled using either of two workflows:
+
+### Method 1: Expo Application Services (EAS Build)
+
+The repository includes `eas.json` for cloud and local builds:
+
+```bash
+# Build preview APK for internal testing
+npx eas-cli build --platform android --profile preview
+
+# Build production release APK
+npx eas-cli build --platform android --profile production
+```
+
+### Method 2: Local Gradle
+
+```bash
+# Build release APK using Gradle inside the android/ folder
+cd android
+./gradlew assembleRelease
+```
+
+The resulting release APK file is located at:
+`android/app/build/outputs/apk/release/app-release.apk`
+
+The release APK is cryptographically signed using the release keystore (`bank-mini-release.jks`) under key alias `bank-mini` and distributed via GitHub Releases in `bank-mini-mobile`.

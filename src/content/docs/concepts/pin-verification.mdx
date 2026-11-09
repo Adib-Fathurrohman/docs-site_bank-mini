@@ -7,24 +7,35 @@ sources:
   - app/Services/PinService.php
   - app/Services/SettingsService.php
   - app/Http/Controllers/API/Customer/AuthController.php
+  - app/Http/Controllers/API/Customer/AccountController.php
   - config/bank.php
   - docs/PIN_VERIFICATION.md
+  - docs/CUSTOMER_AUTH.md
 ---
 
-import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
 import Mermaid from '../../../components/Mermaid.astro';
 
-PIN nasabah adalah 6 digit angka. PIN dipakai untuk login nasabah, mengotorisasi
-penarikan, dan mengganti PIN. Semua pemeriksaan PIN berjalan di **satu tempat**:
+PIN nasabah adalah 6 digit angka. PIN dipakai untuk membuka kunci sesi aplikasi (unlock),
+mengotorisasi penarikan, dan mengganti PIN. **PIN bukan kredensial login** (login menggunakan
+autentikasi Firebase). Semua pemeriksaan PIN berjalan di **satu tempat**:
 `App\Services\PinService::verify()`.
 
-## Penyimpanan
+## Penyimpanan dan kepemilikan
 
 - `customers.pin` di-cast `hashed` (bcrypt, `BCRYPT_ROUNDS=12`) dan termasuk atribut
   tersembunyi (`$hidden`). Tidak ada resource, pesan error, atau log yang memuat PIN.
-- Tabel `withdrawal_authorizations` **tidak punya kolom PIN**.
-- PIN awal ditetapkan admin saat membuka rekening. Admin dapat me-reset PIN, yang juga
-  membuka blokir PIN. Nasabah dapat mengganti PIN sendiri.
+- Kolom `pin` bernilai **nullable**: rekening baru dibuat tanpa PIN (`pin_set: false`).
+- Database menerapkan constraint `CHECK (pin IS NULL OR activated_at IS NOT NULL)`: PIN
+  hanya boleh ada jika rekening sudah diaktifkan.
+- **Admin tidak pernah menetapkan PIN.** PIN dibuat sendiri oleh nasabah di aplikasi mobile
+  setelah aktivasi (`POST /api/customer/pin/setup`) dengan menyertakan token Firebase segar
+  sebagai bukti kepemilikan.
+- Sebelum nasabah membuat PIN, semua operasi yang membutuhkan PIN ditolak dengan status **422**
+  dan kode error `pin_not_set` tanpa mencatat kegagalan.
+- **Dua jalur penanganan Lupa PIN:**
+  1. **Reset Langsung oleh Admin:** Admin mereset PIN melalui portal admin (`POST /api/admin/customers/{id}/pin-reset`). PIN dan status blokir dihapus seketika, dan permintaan mandiri yang terbuka otomatis dibatalkan.
+  2. **Permohonan Mandiri (Self-Service v0.2.1):** Nasabah mengajukan reset di aplikasi (`POST /api/customer/pin-reset-requests`) dengan re-autentikasi Firebase. Permohonan wajib disetujui admin dan memiliki masa tunggu pengamanan 24 jam (`BANK_PIN_RESET_WAIT_HOURS`) sebelum PIN baru dapat dibuat. Selama proses ini berlangsung, seluruh penarikan tunai dijeda (**422** `pin_reset_in_progress`).
 
 ## Blokir PIN bersama
 
@@ -50,8 +61,8 @@ penarikan, dan mengganti PIN. Semua pemeriksaan PIN berjalan di **satu tempat**:
 | --- | --- |
 | Kesalahan sebelum blokir | 3 berturut-turut (`BANK_PIN_MAX_ATTEMPTS`) |
 | Lama blokir | 15 menit (`BANK_PIN_LOCK_MINUTES`) |
-| Berlaku di | Login nasabah, persetujuan penarikan di aplikasi, penarikan dengan PIN di loket, ganti PIN |
-| Reset penghitung | PIN benar, atau admin mengatur PIN baru |
+| Berlaku di | Buka kunci aplikasi (unlock), persetujuan penarikan di aplikasi, penarikan PIN di loket, ganti PIN |
+| Reset penghitung | PIN benar, atau admin melakukan reset PIN |
 | Kolom | `pin_failed_attempts`, `pin_locked_until` |
 
 `PinService::verify()` berjalan dalam **transaksi database sendiri** dengan row lock
@@ -60,42 +71,35 @@ gagal. Pemanggil yang punya transaksi lebih besar (persetujuan, penarikan di lok
 memanggilnya **sebelum** transaksi itu.
 
 <Aside type="caution" title="Satu blokir untuk semua tempat">
-Tiga PIN salah saat login juga memblokir persetujuan penarikan, dan sebaliknya.
-Nomor rekening dan NIS mengarah ke penghitung yang sama.
+Tiga PIN salah saat unlock aplikasi juga memblokir persetujuan penarikan dan penarikan di loket teller.
 </Aside>
 
-### Respons saat PIN salah
+### Respons saat PIN salah atau belum dibuat
 
-<Tabs>
-<TabItem label="Login">
-Login **tidak** memberi tahu sisa percobaan:
+Ketika PIN belum dibuat (`pin_set: false`):
 
-```json
-{ "message": "NIS/nomor rekening atau PIN salah.", "errors": { "identifier": ["NIS/nomor rekening atau PIN salah."] } }
+```json title="422 Unprocessable Entity"
+{
+  "message": "Nasabah belum membuat PIN. PIN dibuat oleh nasabah di aplikasi Bank Mini setelah akun diaktifkan.",
+  "code": "pin_not_set"
+}
 ```
 
-Sejak percobaan ketiga sampai blokir berakhir (jam lokal WIB):
+Ketika PIN salah:
 
-```json
-{ "message": "Terlalu banyak percobaan PIN salah. Coba lagi pukul 09:15.", "errors": { "identifier": ["Terlalu banyak percobaan PIN salah. Coba lagi pukul 09:15."] } }
-```
-</TabItem>
-<TabItem label="Persetujuan, penarikan, ganti PIN">
-```json
+```json title="422 Unprocessable Entity (percobaan 1 atau 2)"
 { "message": "PIN salah. Sisa percobaan: 2.", "remaining_attempts": 2, "pin_locked_until": null }
 ```
 
 Saat diblokir (`pin_locked_until` dalam UTC, pesan dalam WIB):
 
-```json
+```json title="422 Unprocessable Entity (diblokir)"
 {
   "message": "PIN diblokir sementara karena terlalu banyak percobaan salah. Coba lagi pukul 20:25.",
   "remaining_attempts": 0,
   "pin_locked_until": "2026-10-27T13:25:37.830610Z"
 }
 ```
-</TabItem>
-</Tabs>
 
 ## Dua mode otorisasi penarikan
 
@@ -130,8 +134,6 @@ Alur lengkap:
 
 ## Yang belum tersedia
 
-- Lupa PIN oleh nasabah sendiri. PIN di-reset oleh admin.
-- Notifikasi push untuk permintaan penarikan (memakai polling).
 - Persetujuan di aplikasi untuk setoran atau koreksi (hanya penarikan).
 - Pembatasan token nasabah per perangkat: perangkat mana pun tempat nasabah login
   dapat menyetujui.

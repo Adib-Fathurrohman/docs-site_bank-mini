@@ -1,19 +1,23 @@
 ---
 title: Errors
-description: The error response format, what each status code means, extra fields on business errors, and how clients should handle them.
+description: The error response format, what each status code means, structured error codes, extra fields on business errors, and how clients should handle them.
 sidebar:
   order: 9
 sources:
   - bootstrap/app.php
   - app/Exceptions
+  - app/Exceptions/CustomerAuthException.php
+  - app/Exceptions/PinNotSetException.php
+  - app/Exceptions/CustomerAppNotActivatedException.php
   - docs/API.md
+  - docs/CUSTOMER_AUTH.md
   - docs/FRONTEND_HANDOFF.md
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-Every error has a `message`. Validation errors also have `errors` keyed by field. Some
-business errors add other fields.
+Every error has a `message`. Validation errors also have `errors` keyed by field. Business errors
+and customer authentication errors include structured `code` values or additional context fields.
 
 ## Status codes
 
@@ -23,7 +27,7 @@ business errors add other fields.
 | `403` | Wrong actor or role, blocked account or closed account | `{ "message": "Peran Anda tidak memiliki akses ke fitur ini." }` | Log out and return to login (UKK rubric 3.2), except the admin account case below |
 | `404` | Record does not exist or belongs to someone else | `{ "message": "Data tidak ditemukan." }` | Show "not found" |
 | `405` | Method not allowed (e.g. writing to the journal) | `{ "message": "The DELETE method is not supported for route ..." }` | Programming error |
-| `409` | Staff delete refused because of history | `{ "message": "Staf ini memiliki riwayat transaksi, ... Blokir akunnya saja." }` | Offer "Block" |
+| `409` | Staff delete refused because of history, or identity already linked | `{ "message": "Staf ini memiliki riwayat transaksi, ... Blokir akunnya saja." }` | Offer "Block" / handle conflict |
 | `422` + `errors` | Field validation failed | `{ "message": "...", "errors": { "amount": ["The amount field must be at least 1."] } }` | Show messages next to the fields |
 | `422` without `errors` | A business rule refused the request | `{ "message": "Saldo tidak mencukupi. ..." }` | Show the message clearly; nothing was saved |
 | `429` | Too many login, correction or withdrawal-authorization requests | `{ "message": "Too Many Attempts." }` | "Too many attempts, wait a moment" |
@@ -47,13 +51,23 @@ staff is a normal business error. Show the message without logging out.
 The role check runs before the record is looked up, so a wrong role always gets `403`,
 never `404`.
 
-## Business errors with extra fields
+## Business errors with extra fields and error codes
 
-| Case | Extra fields |
-| --- | --- |
-| Physical cash mismatch when closing a shift | `system_balance`, `physical_balance`, `difference` |
-| Wrong or locked PIN (approval, counter withdrawal, PIN change) | `remaining_attempts`, `pin_locked_until` (UTC ISO or null) |
-| Withdrawal request not usable in its current status | `status` (e.g. `expired`, `cancelled`, `consumed`) |
+| Case | Status | Extra fields / `code` | Notes |
+| --- | --- | --- | --- |
+| Customer Firebase authentication refused | `401`, `403`, `409`, `503` | `code`: `firebase_token_invalid`, `provider_not_allowed`, `account_not_linked`, `email_not_verified`, `activation_mismatch`, `already_activated`, `identity_already_linked`, `identity_mismatch`, `pin_already_set`, `auth_unavailable` | Allows client logic to branch on the stable `code` string |
+| Customer has not created a PIN yet | `422` | `code: "pin_not_set"` | Thrown on unlock, withdrawal approvals, or counter withdrawals |
+| Customer app is not activated | `422` | `code: "customer_app_not_activated"` | Thrown when teller initiates mobile-app withdrawal authorization |
+| Physical cash mismatch when closing a shift | `422` | `system_balance`, `physical_balance`, `difference` | Cash discrepancy details |
+| Wrong or locked PIN (approval, counter withdrawal, PIN change, unlock) | `422` | `remaining_attempts`, `pin_locked_until` (UTC ISO or null) | Remaining attempts (max 3) or lock expiry timestamp |
+| Withdrawal request not usable in its current status | `422` | `status` (e.g. `expired`, `cancelled`, `consumed`) | Withdrawal authorization status |
+
+```json title="Example: PIN not set"
+{
+  "message": "Nasabah belum membuat PIN. PIN dibuat oleh nasabah di aplikasi Bank Mini setelah akun diaktifkan.",
+  "code": "pin_not_set"
+}
+```
 
 ```json title="Example: wrong PIN"
 { "message": "PIN salah. Sisa percobaan: 2.", "remaining_attempts": 2, "pin_locked_until": null }

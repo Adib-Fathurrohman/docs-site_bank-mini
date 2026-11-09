@@ -1,0 +1,88 @@
+---
+title: Memulai & Arsitektur Web
+description: Menjalankan aplikasi web staf React, variabel lingkungan, penyimpanan token, autentikasi, dan route guard.
+sidebar:
+  order: 1
+sources:
+  - bank_mini/front-end/package.json
+  - bank_mini/front-end/src/App.tsx
+  - bank_mini/front-end/src/main.tsx
+  - bank_mini/front-end/src/api/client.ts
+  - bank_mini/front-end/src/auth/AuthProvider.tsx
+  - bank_mini/front-end/src/auth/guards.tsx
+  - bank_mini/front-end/src/layouts/AppShell.tsx
+  - bank_mini/front-end/src/layouts/StaffLayout.tsx
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Aplikasi web staf adalah Single Page Application (SPA) modern yang dibangun khusus untuk tiga peran staf sekolah: **Administrator**, **Supervisor**, dan **Teller**.
+
+## Teknologi yang digunakan
+
+- **Framework & UI:** React 19, TypeScript, Tailwind CSS 4.
+- **Routing:** React Router 8 (dengan layout bertingkat dan route guard per peran).
+- **Manajemen State Server:** TanStack Query 5 (pengambilan data deklaratif, caching, dan invalidasi otomatis).
+- **Komponen Kamera/QR:** `@zxing/browser` untuk pemindaian kode QR kartu nasabah melalui webcam.
+- **Testing & Tooling:** Vite 8, Vitest.
+
+## Menjalankan aplikasi
+
+<Steps>
+
+1. Masuk ke direktori aplikasi frontend dan pasang dependensi:
+
+   ```bash
+   cd ../bank_mini/front-end
+   npm install
+   ```
+
+2. Konfigurasi alamat API backend pada berkas `.env` atau `.env.local`:
+
+   ```dotenv
+   # Alamat REST API Laravel (bawaan: /api jika menggunakan reverse proxy, atau URL absolut)
+   VITE_API_BASE_URL=http://localhost:8000/api
+   ```
+
+3. Jalankan server pengembangan Vite:
+
+   ```bash
+   npm run dev
+   ```
+
+   Aplikasi dapat diakses secara lokal di `http://localhost:5173`.
+
+4. Untuk build produksi:
+
+   ```bash
+   npm run build
+   ```
+
+   Berkas statis hasil build akan tersimpan di folder `dist/`.
+
+</Steps>
+
+## Arsitektur autentikasi & sesi
+
+Aplikasi menggunakan modul klien HTTP terpusat (`src/api/client.ts`) dan konteks autentikasi (`src/auth/AuthProvider.tsx`).
+
+### Penyimpanan token
+- Sesuai panduan keamanan loket bersama, token Sanctum disimpan di **`sessionStorage`** dan memori aplikasi. Token otomatis terhapus saat tab browser ditutup.
+- Setiap kali aplikasi dibuka atau di-refresh, `AuthProvider` memverifikasi token dengan memanggil `GET /api/staff/me`.
+- Jika valid, data profil staf (`id`, `username`, `full_name`, `role`, `is_active`) disimpan ke state aplikasi.
+
+### Penanganan `401` dan `403`
+- Klien HTTP mendeteksi respons `401 Unauthenticated` atau `403 Forbidden` yang mengakhiri sesi (misalnya akun dinonaktifkan atau peran salah).
+- Saat error terjadi, sesi lokal langsung dibersihkan dan pengguna dialihkan ke halaman `/login` dengan notifikasi pesan kesalahan.
+- Pengecualian: Error bisnis 403 biasa (seperti `"Akun administrator tidak dapat diubah melalui API."`) ditangani secara lokal di form tanpa memicu logout.
+
+## Route Guard & Proteksi Layar
+
+Daftar rute dilindungi oleh komponen guard di `src/auth/guards.tsx`:
+
+| Guard | Syarat | Aksi jika tidak memenuhi |
+| --- | --- | --- |
+| `RequireRole` | Pengguna terautentikasi dan memiliki peran yang sesuai | Mengalihkan ke `/login` (jika belum masuk) atau ke dashboard perannya sendiri |
+| `HomeRedirect` | Rute akar `/` | Mengarahkan ke `/teller` (teller), `/supervisor` (supervisor), atau `/admin` (admin) |
+
+Terkait: [Alur login dan sesi](/workflows/authentication/) · [Referensi API Autentikasi](/api/authentication/)

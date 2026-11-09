@@ -1,21 +1,31 @@
 ---
 title: Customer
-description: Customer portal endpoints for the mobile app — balance, statement, digital card, statement PDF and PIN change.
+description: Customer portal endpoints for the mobile app — balance, statement, digital card, PIN unlock, initial PIN setup, and PIN change.
 sidebar:
   order: 8
 sources:
   - routes/api.php
   - app/Http/Controllers/API/Customer/AccountController.php
+  - app/Http/Controllers/API/Customer/AuthController.php
+  - app/Http/Controllers/API/Customer/PinResetController.php
+  - app/Http/Controllers/API/Customer/PushTokenController.php
+  - app/Http/Requests/Customer/CompletePinResetRequest.php
+  - app/Http/Requests/Customer/PinResetRequestRequest.php
+  - app/Http/Requests/Customer/PushTokenRequest.php
+  - app/Http/Requests/Customer/SetUpPinRequest.php
+  - app/Http/Requests/Customer/UnlockRequest.php
   - app/Http/Resources/StatementLineResource.php
+  - app/Services/PinResetService.php
   - app/Services/PinService.php
   - docs/API.md
+  - docs/CUSTOMER_AUTH.md
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 import Endpoint from '../../../../components/Endpoint.astro';
 
 Every endpoint is scoped to the account of the **customer** token; `?customer_id=` and
-similar parameters are ignored. Login, profile and logout are under
+similar parameters are ignored. Login, activation, profile, and logout are under
 [Authentication](/en/api/authentication/); withdrawal approval is under
 [Withdrawal authorizations](/en/api/withdrawal-authorizations/#customer-side).
 
@@ -70,6 +80,47 @@ The same shape as the admin card, with `qr_payload` (`BANKMINI:{account_number}`
 show as a QR code at the counter. The QR payload only identifies the customer; it
 authorizes nothing (L17).
 
+## Unlock app session
+
+<Endpoint method="POST" path="/api/customer/unlock" roles="customer" limit="5 per minute per customer" />
+
+Verifies the customer's PIN when reopening the mobile app during an active session:
+
+```json
+{ "pin": "123456" }
+```
+
+| Status | Response | Notes |
+| --- | --- | --- |
+| 200 | `{ "message": "PIN benar." }` | Valid PIN |
+| 422 | `{ "message": "PIN salah. Sisa percobaan: 2.", "remaining_attempts": 2 }` | Wrong PIN; counts toward shared 3-attempt limit |
+| 422 | `{ "message": "Terlalu banyak percobaan PIN salah. Coba lagi pukul ...", "pin_locked_until": "..." }` | Temporarily locked (15 minutes) |
+| 422 | `{ "code": "pin_not_set", "message": "Nasabah belum membuat PIN. PIN dibuat oleh nasabah di aplikasi Bank Mini setelah akun diaktifkan." }` | Customer has not set up initial PIN |
+
+## Initial PIN setup
+
+<Endpoint method="POST" path="/api/customer/pin/setup" roles="customer" limit="5 per minute per customer" />
+
+Called by the customer after first account activation, or after an administrator PIN reset:
+
+| Field | Rule |
+| --- | --- |
+| `id_token` | Required, fresh Firebase ID token (re-authentication) matching bound account |
+| `pin` | Required, 6 digits |
+| `pin_confirmation` | Required, must match `pin` |
+
+```json
+{
+  "id_token": "<fresh-firebase-id-token>",
+  "pin": "135790",
+  "pin_confirmation": "135790"
+}
+```
+
+- **201 Created:** `{ "message": "PIN berhasil dibuat." }`
+- **403 Forbidden:** `{ "code": "identity_mismatch" }` if ID token belongs to a different Firebase account than the customer's bound identity
+- **409 Conflict:** `{ "code": "pin_already_set" }` if PIN is already set (use change PIN instead)
+
 ## Change PIN
 
 <Endpoint method="POST" path="/api/customer/pin" roles="customer" />
@@ -81,7 +132,126 @@ authorizes nothing (L17).
 | `new_pin_confirmation` | Must equal `new_pin` |
 
 **200** `{ "message": "PIN berhasil diubah." }`. A wrong `current_pin` counts toward the
-same lock as login and withdrawals (**422** with `remaining_attempts`).
+same lock as unlock and withdrawals (**422** with `remaining_attempts`).
+If no PIN has been set yet, returns **422** (`code: "pin_not_set"`).
+
+## Forgotten PIN: self-service requests
+
+Self-service forgotten-PIN workflow (v0.2.1) for students who cannot recall their PIN:
+- **Two safeguards:** Requests require administrator approval and the new PIN can only be completed after a 24-hour waiting window (`BANK_PIN_RESET_WAIT_HOURS`).
+- **Withdrawal pause:** While a request is open (`pending` or `approved`), withdrawals across all interfaces (teller counter, Mode A authorizations, and in-app approvals) are paused (**422** `pin_reset_in_progress`) to protect account funds in case of a stolen device. Deposits remain fully functional.
+- **Push alerts:** The student's registered phones receive FCM push notifications at every phase, enabling the genuine account owner to cancel illegitimate attempts.
+
+<Endpoint method="GET" path="/api/customer/pin-reset-request" roles="customer" />
+
+Retrieves the caller's active forgotten-PIN request (`pending` or `approved`), or `null` if none is open:
+
+```json title="200 — active request response"
+{
+  "data": {
+    "id": "01JM6T...",
+    "status": "pending",
+    "status_label": "Menunggu persetujuan",
+    "requested_at": "2026-11-09T08:00:00Z",
+    "available_at": "2026-11-10T08:00:00Z",
+    "ready": false,
+    "expires_at": "2026-11-16T08:00:00Z",
+    "approved_at": null,
+    "rejected_at": null,
+    "cancelled_at": null,
+    "completed_at": null,
+    "decision_note": null
+  }
+}
+```
+
+<Endpoint method="POST" path="/api/customer/pin-reset-requests" roles="customer" limit="5/minute per customer" />
+
+Submits a new self-service forgotten-PIN request. Requires fresh Firebase authentication:
+
+| Field | Type | Rules | Description |
+| --- | --- | --- | --- |
+| `id_token` | string | Required | Fresh Firebase ID token confirming account ownership |
+
+```json
+{
+  "id_token": "<fresh-firebase-id-token>"
+}
+```
+
+- **201 Created:** Returns a new `PinResetRequest` with `status: pending`.
+- **409 Conflict:** `pin_reset_already_requested` if an open request already exists.
+- **422 Unprocessable:** `pin_not_set` if the customer has not created a PIN yet (use `/pin/setup`).
+
+<Endpoint method="POST" path="/api/customer/pin-reset-requests/{pinResetRequest}/cancel" roles="customer" />
+
+Cancels an open request. Marks status as `cancelled` and immediately lifts the withdrawal hold on the account.
+
+- **200 OK:** Returns `PinResetRequest` with `status: cancelled`.
+- **409 Conflict:** `pin_reset_not_usable` if the request is already completed, expired, or rejected.
+
+<Endpoint method="POST" path="/api/customer/pin-reset-requests/{pinResetRequest}/complete" roles="customer" limit="5/minute per customer" />
+
+Sets a new 6-digit PIN once the request is approved by an administrator and the 24-hour wait window has elapsed (`ready: true`):
+
+| Field | Type | Rules | Description |
+| --- | --- | --- | --- |
+| `id_token` | string | Required | Fresh Firebase ID token from the linked account |
+| `pin` | string | Required, 6 digits | The new PIN |
+| `pin_confirmation` | string | Required | Must match `pin` |
+
+```json
+{
+  "id_token": "<fresh-firebase-id-token>",
+  "pin": "246810",
+  "pin_confirmation": "246810"
+}
+```
+
+- **200 OK:** `{ "message": "PIN berhasil diganti." }`. The new PIN becomes active immediately, any prior PIN lock is cleared, and withdrawals resume.
+- **409 Conflict:** `pin_reset_not_approved` if awaiting admin approval, or `pin_reset_not_ready` if `available_at` has not arrived yet.
+
+## Register push notification token
+
+<Endpoint method="POST" path="/api/customer/push-tokens" roles="customer" limit="10/minute per customer" />
+
+Registers the device's FCM registration token to receive push notifications for new withdrawal
+authorization requests. The token is tied to the active session (`personal_access_token_id`):
+
+| Field | Type | Rules | Description |
+| --- | --- | --- | --- |
+| `token` | string | Required, max 255 | FCM registration token of the device |
+| `platform` | string | Required, `android` \| `ios` | Device operating system platform |
+
+```json
+{
+  "token": "fcm-registration-token-example-...",
+  "platform": "android"
+}
+```
+
+- **201 Created:** `{ "message": "Notifikasi aktif di perangkat ini." }` when newly registered.
+- **200 OK:** `{ "message": "Notifikasi aktif di perangkat ini." }` if the token was already registered.
+
+The token is unique; if previously registered by another customer on the same device, ownership is transferred to the calling customer and current session. The token is deleted automatically upon logout, logout-all, account deactivation, or personal access token expiration.
+
+## Unregister push notification token
+
+<Endpoint method="DELETE" path="/api/customer/push-tokens" roles="customer" limit="10/minute per customer" />
+
+Disables push notifications for this device (for example when the customer toggles off notifications in profile/settings):
+
+| Field | Type | Rules | Description |
+| --- | --- | --- | --- |
+| `token` | string | Required, max 255 | FCM registration token to remove |
+
+```json
+{
+  "token": "fcm-registration-token-example-..."
+}
+```
+
+- **200 OK:** `{ "message": "Notifikasi dimatikan di perangkat ini." }` (also returned when the token is already nonexistent).
 
 ## StatementLine object
 

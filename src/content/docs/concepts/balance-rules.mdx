@@ -58,6 +58,10 @@ Nasabah dapat melihat saldo minimum di `GET /api/customer/balance` (`min_balance
 | `suspended` | ✓ | — | ✓ | ✓ | Diubah admin |
 | `inactive` | — | — | — | — | Hanya lewat penutupan (lulus), yang juga melakukan soft delete |
 
+<Aside type="note" title="Status rekening vs Status aktivasi aplikasi">
+Rekening baru langsung berstatus perbankan `active` sehingga dapat menerima setoran di loket teller meskipun nasabah belum mengaktifkan aplikasi. Namun penarikan dana membutuhkan persetujuan/PIN, sehingga penarikan baru dapat dilakukan setelah nasabah mengaktifkan aplikasi dan membuat PIN.
+</Aside>
+
 - Rekening yang ditangguhkan tetap dapat login dan melihat saldo. Tokennya tidak
   dicabut.
 - Penutupan rekening (`POST /admin/customers/{id}/deactivate`) mengubah status ke

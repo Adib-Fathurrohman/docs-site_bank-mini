@@ -26,6 +26,9 @@ Semua penolakan aturan bisnis adalah turunan `App\Exceptions\BankingException`
 | `AccountNotActiveException` | Rekening tidak dapat bertransaksi (misalnya ditangguhkan) | — |
 | `InsufficientBalanceException` | Penarikan melanggar saldo minimum, atau koreksi setoran membuat saldo negatif | — |
 | `InvalidPinException` | PIN salah atau sedang diblokir | `remaining_attempts`, `pin_locked_until` |
+| `PinNotSetException` | Nasabah belum membuat PIN awal di aplikasi | `code: "pin_not_set"` |
+| `CustomerAppNotActivatedException` | Nasabah belum mengaktifkan aplikasi mobile saat teller membuat otorisasi penarikan | `code: "customer_app_not_activated"` |
+| `CustomerAuthException` | Autentikasi/aktivasi Firebase ditolak (token tidak valid, provider dilarang, belum ditautkan, mismatch) | `code` (status HTTP 401, 403, 409, atau 503) |
 | `CashMismatchException` | Uang fisik saat penutupan berbeda dari saldo sistem | `system_balance`, `physical_balance`, `difference` |
 | `CorrectionNotAllowedException` | Koreksi ditolak (shift salah, sudah dikoreksi, …) | — |
 | `IdempotencyConflictException` | `Idempotency-Key` dipakai ulang untuk transaksi lain | — |

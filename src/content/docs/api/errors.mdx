@@ -6,14 +6,18 @@ sidebar:
 sources:
   - bootstrap/app.php
   - app/Exceptions
+  - app/Exceptions/CustomerAuthException.php
+  - app/Exceptions/PinNotSetException.php
+  - app/Exceptions/CustomerAppNotActivatedException.php
   - docs/API.md
+  - docs/CUSTOMER_AUTH.md
   - docs/FRONTEND_HANDOFF.md
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
 Setiap error punya `message`. Error validasi juga punya `errors` yang dikelompokkan per
-field. Beberapa error bisnis menambahkan field lain.
+field. Error bisnis dan autentikasi nasabah menyertakan kode `code` atau field pendukung lain.
 
 ## Kode status
 
@@ -47,13 +51,23 @@ menghapus staf adalah error bisnis biasa. Tampilkan pesannya tanpa logout.
 Pemeriksaan peran berjalan sebelum data dicari, sehingga peran yang salah selalu
 mendapat `403`, tidak pernah `404`.
 
-## Error bisnis dengan field tambahan
+## Error bisnis dengan field tambahan dan kode error
 
-| Kasus | Field tambahan |
-| --- | --- |
-| Uang fisik tidak cocok saat menutup shift | `system_balance`, `physical_balance`, `difference` |
-| PIN salah atau diblokir (persetujuan, penarikan di loket, ganti PIN) | `remaining_attempts`, `pin_locked_until` (UTC ISO atau null) |
-| Permintaan penarikan tidak dapat diproses dalam status saat ini | `status` (misalnya `expired`, `cancelled`, `consumed`) |
+| Kasus | Status | Field tambahan / `code` | Keterangan |
+| --- | --- | --- | --- |
+| Autentikasi nasabah Firebase ditolak | `401`, `403`, `409`, `503` | `code`: `firebase_token_invalid`, `provider_not_allowed`, `account_not_linked`, `email_not_verified`, `activation_mismatch`, `already_activated`, `identity_already_linked`, `identity_mismatch`, `pin_already_set`, `auth_unavailable` | Klien dapat melakukan percabangan logika berdasarkan string `code` |
+| Nasabah belum membuat PIN | `422` | `code: "pin_not_set"` | Muncul saat unlock, otorisasi penarikan, atau penarikan teller |
+| Nasabah belum aktivasi aplikasi | `422` | `code: "customer_app_not_activated"` | Ditolak saat teller membuat otorisasi penarikan mode aplikasi |
+| Uang fisik tidak cocok saat menutup shift | `422` | `system_balance`, `physical_balance`, `difference` | Selisih kas teller |
+| PIN salah atau diblokir (persetujuan, penarikan di loket, ganti PIN, unlock) | `422` | `remaining_attempts`, `pin_locked_until` (UTC ISO atau null) | Sisa percobaan (maks 3) atau jam selesai blokir |
+| Permintaan penarikan tidak dapat diproses dalam status saat ini | `422` | `status` (misalnya `expired`, `cancelled`, `consumed`) | Status otorisasi penarikan |
+
+```json title="Contoh: PIN belum dibuat"
+{
+  "message": "Nasabah belum membuat PIN. PIN dibuat oleh nasabah di aplikasi Bank Mini setelah akun diaktifkan.",
+  "code": "pin_not_set"
+}
+```
 
 ```json title="Contoh: PIN salah"
 { "message": "PIN salah. Sisa percobaan: 2.", "remaining_attempts": 2, "pin_locked_until": null }

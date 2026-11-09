@@ -34,7 +34,7 @@ const pages: Record<string, { slug: string; id: string; en: string }> = {
 // The page that documents a route, by path.
 function pageFor(path: string) {
 	const p = path.replace(/^\/api/, '');
-	if (/^\/(login|staff\/login|customer\/login|staff\/me|staff\/logout|customer\/me|customer\/logout)$/.test(p)) return pages.authentication;
+	if (/^\/(login|staff\/login|customer\/auth\/login|customer\/activation|staff\/me|staff\/logout|customer\/me|customer\/logout|customer\/logout-all)$/.test(p)) return pages.authentication;
 	if (p.includes('withdrawal-authorizations')) return pages.authorizations;
 	if (p.startsWith('/teller')) return pages.teller;
 	if (p.startsWith('/supervisor')) return pages.supervisor;
@@ -46,10 +46,13 @@ function pageFor(path: string) {
 // Indonesian wording for the rate limits in the summary (falls back to the original).
 const limitsId: Record<string, string> = {
 	'5 per minute per username/identifier + IP': '5 per menit per username/identifier + IP',
+	'5 per minute per username/identifier + IP (staff) or 30 per minute per IP (customer id_token)': '5 per menit per username/identifier + IP (staf) atau 30 per menit per IP (id_token nasabah)',
+	'20 per minute per IP': '20 per menit per IP',
 	'10 per minute per teller': '10 per menit per teller',
 	'10 per 1 minute(s) per user': '10 per menit per teller',
 	'120 per minute per actor (teller or customer)': '120 per menit per aktor (teller atau nasabah)',
 	'5 per minute per customer': '5 per menit per nasabah',
+	'10 per minute per customer': '10 per menit per nasabah',
 };
 const limitText = (limit: string) => (isEnglish ? limit : (limitsId[limit] ?? limit));
 

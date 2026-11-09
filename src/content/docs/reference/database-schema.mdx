@@ -36,12 +36,16 @@ dan `personal_access_tokens` (token Sanctum) tidak dibahas rinci.
   users ||--o{ cash_transfers : "approved_by"
   users |o--o{ settings : "updated_by"
   users ||--o{ withdrawal_authorizations : "teller_id"
+  users ||--o{ customer_imports : "imported_by"
   customers ||--o{ transactions : "customer_id"
   customers ||--o{ withdrawal_authorizations : "customer_id"
-  daily_reports ||--o{ transactions : "daily_report_id"
+  daily_reports |o--o{ transactions : "daily_report_id"
+  customer_imports |o--o{ transactions : "customer_import_id"
   daily_reports ||--o{ cash_counts : "daily_report_id"
   daily_reports ||--o| cash_transfers : "daily_report_id"
   daily_reports ||--o{ withdrawal_authorizations : "daily_report_id"
+  customers ||--o{ customer_push_tokens : "customer_id"
+  personal_access_tokens ||--o{ customer_push_tokens : "personal_access_token_id"
   transactions ||--|{ accounting_journals : "transaction_id"
   transactions |o--o| transactions : "corrects_transaction_id"
   transactions |o--o| withdrawal_authorizations : "transaction_id"`}
@@ -80,16 +84,28 @@ Rekening tabungan siswa.
 | `id` | bigint | PK |
 | `account_number` | string | Unik, dibuat otomatis |
 | `nis` | string | Unik |
+| `email` | string, nullable | **Unik**. Diisi admin saat pembuatan; untuk aktivasi aplikasi |
+| `firebase_uid` | string(128), nullable | **Unik**. Disimpan saat aktivasi akun pertama kali via Firebase; tersembunyi |
+| `email_verified_at` | timestamp, nullable | Waktu verifikasi email Firebase |
+| `activated_at` | timestamp, nullable | Waktu aktivasi aplikasi mobile |
 | `full_name` | string | |
 | `class` | enum `X`, `XI`, `XII` | |
 | `major_id` | FK → `majors` | RESTRICT |
 | `group` | enum `1`–`4` | Kelas paralel |
 | `account_status` | enum `active`, `suspended`, `inactive` | Bawaan `active` |
-| `pin` | string | Hash bcrypt, tersembunyi |
+| `pin` | string, nullable | Hash bcrypt, tersembunyi. Dibuat sendiri oleh nasabah setelah aktivasi |
 | `pin_failed_attempts` | tinyint unsigned, bawaan 0 | Penghitung PIN salah berturut-turut |
 | `pin_locked_until` | timestamp, nullable | Akhir blokir PIN |
 | `balance` | integer, bawaan 0 | `CHECK (balance >= 0)` |
 | `deleted_at` | timestamp, nullable | Soft delete (rekening ditutup) |
+
+```sql title="Constraint CHECK pada customers"
+-- Rekening teraktivasi harus memiliki identitas Firebase
+CHECK (activated_at IS NULL OR firebase_uid IS NOT NULL)
+
+-- PIN hanya boleh ada setelah rekening diaktifkan oleh nasabah
+CHECK (pin IS NULL OR activated_at IS NOT NULL)
+```
 
 ## `daily_reports`
 
@@ -130,23 +146,42 @@ Unik: (`daily_report_id`, `stage`, `denomination`).
 | Kolom | Tipe | Catatan |
 | --- | --- | --- |
 | `id` | bigint | PK, nomor transaksi di struk |
-| `user_id` | FK → `users` | Teller pencatat |
+| `user_id` | FK → `users` | Teller pencatat (atau admin saat impor) |
 | `customer_id` | FK → `customers` | |
-| `daily_report_id` | FK → `daily_reports` | Shift |
+| `daily_report_id` | FK → `daily_reports`, nullable | Shift teller; bernilai null untuk transaksi hasil impor |
+| `customer_import_id` | FK → `customer_imports`, nullable | Batch impor pembukuan lama |
 | `type` | enum `deposit`, `withdrawal`, `deposit_correction`, `withdrawal_correction` | `CHECK` daftar jenis |
 | `amount` | integer unsigned | `CHECK (amount > 0)` |
 | `balance_before`, `balance_after` | integer unsigned | |
 | `corrects_transaction_id` | FK → `transactions`, nullable, **unik** | Satu koreksi per transaksi |
 | `authorized_by` | FK → `users`, nullable | Supervisor yang mengotorisasi koreksi |
-| `note` | string, nullable | Alasan koreksi |
+| `note` | string, nullable | Alasan koreksi atau catatan saldo awal |
 | `idempotency_key` | string(100), nullable | **Unik bersama `user_id`** |
 
 Indeks: (`customer_id`, `created_at`), (`user_id`, `created_at`).
 
-```sql title="chk_transactions_correction"
+```sql title="chk_transactions_correction dan chk_transactions_source"
+-- koreksi membutuhkan transaksi yang dikoreksi dan supervisor
 (type IN ('deposit', 'withdrawal') AND corrects_transaction_id IS NULL AND authorized_by IS NULL)
 OR (type IN ('deposit_correction', 'withdrawal_correction') AND corrects_transaction_id IS NOT NULL AND authorized_by IS NOT NULL)
+
+-- transaksi berasal dari shift teller atau impor pembukuan lama (hanya setor/tarik)
+(daily_report_id IS NOT NULL AND customer_import_id IS NULL)
+OR (daily_report_id IS NULL AND customer_import_id IS NOT NULL AND type IN ('deposit', 'withdrawal'))
 ```
+
+## `customer_imports`
+
+Batch impor nasabah dan saldo/riwayat dari pembukuan lama.
+
+| Kolom | Tipe | Catatan |
+| --- | --- | --- |
+| `id` | bigint | PK |
+| `imported_by` | FK → `users` | Administrator pengunggah berkas |
+| `file_name` | string | Nama berkas spreadsheet yang diimpor |
+| `customer_count` | integer unsigned | Jumlah rekening yang berhasil dibuat |
+| `transaction_count` | integer unsigned | Jumlah transaksi historis yang dicatat |
+| `created_at`, `updated_at` | timestamp | |
 
 ## `accounting_journals`
 
@@ -209,6 +244,19 @@ OR (status <> 'consumed' AND transaction_id IS NULL)
 -- approved dan consumed selalu punya waktu persetujuan
 status NOT IN ('approved', 'consumed') OR (approved_at IS NOT NULL AND approval_expires_at IS NOT NULL)
 ```
+
+## `customer_push_tokens`
+
+Token registrasi FCM perangkat nasabah untuk menerima push notification permintaan otorisasi penarikan.
+
+| Kolom | Tipe | Catatan |
+| --- | --- | --- |
+| `id` | bigint | PK |
+| `customer_id` | FK → `customers` | CASCADE on delete |
+| `personal_access_token_id` | FK → `personal_access_tokens` | CASCADE on delete (dihapus saat sesi logout atau kedaluwarsa) |
+| `token` | string(255) | Unik, FCM registration token perangkat |
+| `platform` | string(10) | `android` atau `ios` |
+| `created_at`, `updated_at` | timestamp | |
 
 ## `personal_access_tokens`
 

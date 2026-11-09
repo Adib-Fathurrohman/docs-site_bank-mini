@@ -6,7 +6,7 @@ import { tableWrap } from './src/plugins/table-wrap.mjs';
 import { sidebar } from './src/sidebar.mjs';
 
 // Set SITE_URL when deploying (used for the sitemap and canonical links).
-const site = process.env.SITE_URL || undefined;
+const site = process.env.SITE_URL || 'https://docs-bank.rumput.tech';
 
 export default defineConfig({
 	site,

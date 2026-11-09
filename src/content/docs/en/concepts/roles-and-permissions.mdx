@@ -39,7 +39,7 @@ row and has no `role`.
 | Administrator | `App\Models\User` | `admin` | Created by the seeder; cannot be created, edited, blocked or deleted through the API |
 | Supervisor | `User` | `supervisor` | |
 | Teller | `User` | `teller` | Usually a student on duty (`class`, `phone` fields) |
-| Customer (*nasabah*) | `App\Models\Customer` | — | Students; log in with NIS/account number + PIN |
+| Customer (*nasabah*) | `App\Models\Customer` | — | Students; log in with Firebase (Google or email/password), activate account via NIS |
 
 Each staff member has exactly one role. Multi-role users are not supported.
 
@@ -67,7 +67,9 @@ Each staff member has exactly one role. Multi-role users are not supported.
 | `staff` | `EnsureStaffRole` | The token must belong to a `User` with `is_active = true`. Otherwise `403 "Fitur ini khusus untuk staf bank."` or `"Akun staf ini sudah dinonaktifkan."` |
 | `staff:admin,supervisor` (etc.) | `EnsureStaffRole` | As above, plus `role` must be in the list. Otherwise `403 "Peran Anda tidak memiliki akses ke fitur ini."` |
 | `customer` | `EnsureCustomer` | The token must belong to a `Customer` whose status is not `inactive`. Otherwise `403 "Fitur ini khusus untuk nasabah."` or `"Rekening ini sudah tidak aktif."` |
-| `throttle:login` | Rate limiter | 5 attempts per minute per username/identifier + IP |
+| `throttle:login` | Rate limiter | 5 attempts per minute per username + IP (staff) or 30 per minute per IP (customer id_token) |
+| `throttle:customer-activation` | Rate limiter | 20 per minute per IP |
+| `throttle:customer-unlock` | Rate limiter | 5 per minute per customer (unlock & PIN setup) |
 | `throttle:10,1` | Rate limiter | 10 corrections per minute per teller |
 | `throttle:withdrawal-authorization-*` | Named rate limiters | Withdrawal authorization request limits per actor (see [Withdrawal authorization API](/en/api/withdrawal-authorizations/)) |
 
@@ -97,12 +99,17 @@ exist in the backend are listed.
 | Capability | Admin | Supervisor | Teller | Customer |
 | --- | :-: | :-: | :-: | :-: |
 | Log in, log out, read own profile | ✓ | ✓ | ✓ | ✓ |
+| Log out across all devices | — | — | — | ✓ |
+| Activate account with NIS + Firebase identity | — | — | — | ✓ |
+| Unlock app session with PIN | — | — | — | ✓ |
+| Initial PIN setup (post-activation / reset) | — | — | — | ✓ |
+| Reset customer PIN (forgot PIN) | ✓ | — | — | — |
 | Read majors and settings | ✓ | ✓ | ✓ | — |
 | Change settings | ✓ | — | — | — |
 | List and view staff | ✓ | ✓ | — | — |
 | Create, edit, block, delete, import tellers/supervisors | ✓ | — | — | — |
-| List and view customer accounts (including closed ones) | ✓ | ✓ | — | — |
-| Open, edit, reset PIN, suspend, close accounts | ✓ | — | — | — |
+| List and view customer accounts (including activation filter and closed ones) | ✓ | ✓ | — | — |
+| Open, edit, suspend, close accounts | ✓ | — | — | — |
 | Customer card data (QR payload) for printing | ✓ | — | — | — |
 | Statement PDF for any customer | ✓ | ✓ | — | — |
 | Look up one customer by QR / account number / NIS | — | — | ✓ | — |

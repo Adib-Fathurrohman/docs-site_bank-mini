@@ -23,8 +23,10 @@ atau dihapus lewat API, termasuk password-nya.
 | Mengelola teller dan supervisor: buat, ubah, blokir, buka blokir, hapus (jika belum punya riwayat) | `POST /api/admin/staff`, `PUT\|PATCH`/`DELETE /api/admin/staff/{id}`, `…/block`, `…/unblock` |
 | Mengimpor staf dari spreadsheet `.xlsx`/`.csv` | `POST /api/admin/staff/import` |
 | Melihat daftar dan detail staf | `GET /api/staff`, `GET /api/staff/{id}` |
-| Membuka rekening, mengubah data, menangguhkan, me-reset PIN | `POST /api/admin/customers`, `PUT\|PATCH /api/admin/customers/{id}` |
-| Menutup rekening siswa yang lulus | `POST /api/admin/customers/{id}/deactivate` |
+| Membuka rekening (tanpa PIN), mengubah data, menangguhkan | `POST /api/admin/customers`, `PUT\|PATCH /api/admin/customers/{id}` |
+| Reset PIN nasabah langsung (di loket admin) | `POST /api/admin/customers/{id}/pin-reset` |
+| Menyetujui atau menolak permohonan reset PIN mandiri nasabah | `GET /api/pin-reset-requests`, `POST /api/admin/pin-reset-requests/{id}/approve`, `…/reject` |
+| Menutup rekening siswa (nonaktifkan user Firebase, soft delete) | `POST /api/admin/customers/{id}/deactivate` |
 | Mengambil data kartu nasabah (payload QR) | `GET /api/admin/customers/{id}/card` |
 | Melihat rekening, termasuk yang sudah ditutup | `GET /api/customers`, `GET /api/customers/{id}` |
 | Mengubah saldo minimum, mode pemindai QR, dan mode verifikasi penarikan | `PUT\|PATCH /api/admin/settings` |

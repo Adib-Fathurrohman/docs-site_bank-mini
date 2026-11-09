@@ -1,0 +1,94 @@
+---
+title: Layar & Operasional Teller
+description: Panduan operasional antarmuka teller — buka dan tutup shift kas, loket setoran dan penarikan tunai, pemindai QR, persetujuan Mode A, dan koreksi transaksi.
+sidebar:
+  order: 2
+sources:
+  - bank_mini/front-end/src/features/teller/TellerLayout.tsx
+  - bank_mini/front-end/src/features/teller/TellerHomePage.tsx
+  - bank_mini/front-end/src/features/teller/OpenShiftForm.tsx
+  - bank_mini/front-end/src/features/teller/CounterPage.tsx
+  - bank_mini/front-end/src/features/teller/QrScanner.tsx
+  - bank_mini/front-end/src/features/teller/TransactionsPage.tsx
+  - bank_mini/front-end/src/features/teller/CloseShiftPage.tsx
+  - bank_mini/front-end/src/features/teller/ShiftDetailPage.tsx
+  - bank_mini/front-end/src/features/teller/ShiftHistoryPage.tsx
+  - bank_mini/front-end/src/features/teller/components/CorrectionDialog.tsx
+  - bank_mini/front-end/src/features/teller/components/DenominationCounter.tsx
+  - bank_mini/front-end/src/features/teller/components/TransactionReceipt.tsx
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Antarmuka teller (`/teller/*`) dirancang untuk operasional harian loket bank mini di sekolah. Seluruh transaksi kas dilindungi oleh status shift aktif.
+
+## 1. Membuka Shift Kas (`/teller`)
+
+Sebelum dapat melayani nasabah di loket, teller wajib membuka shift untuk hari ini:
+
+<Steps>
+
+1. Masuk ke halaman utama teller di `/teller`. Jika belum ada shift yang aktif, formulir **Buka Shift** akan ditampilkan secara otomatis.
+2. Hitung modal kas awal fisik yang ada di laci menggunakan tabel pecahan uang (`DenominationCounter`):
+   - Masukkan jumlah lembar/keping untuk tiap pecahan (Rp100.000, Rp50.000, ..., Rp100).
+   - Sistem otomatis menghitung total saldo awal kas.
+3. Klik **Buka Shift**. Aplikasi memanggil `POST /api/teller/shift/open`.
+4. Setelah shift terbuka, status indikator di navbar berubah menjadi hijau (`Shift Terbuka`), dan menu loket siap digunakan.
+
+</Steps>
+
+## 2. Loket Transaksi (`/teller/counter`)
+
+Layar loket adalah pusat layanan nasabah.
+
+### Pencarian nasabah
+- **Kamera QR:** Menggunakan komponen `QrScanner` (via webcam laptop). Arahkan kartu fisik atau layar kartu digital siswa pada kamera. Format payload `BANKMINI:{account_number}` dipindai secara otomatis.
+- **Pencarian Manual:** Teller dapat mengetikkan nomor rekening atau NIS nasabah di kotak pencarian.
+- Saat nasabah ditemukan, panel detail nasabah (`CustomerPanel`) menampilkan nama, kelas, jurusan, saldo berjalan, status rekening, dan status aktivasi aplikasi mobile.
+
+### Setor tunai
+1. Pilih tab **Setor Tunai**.
+2. Masukkan nominal uang yang disetorkan (kelipatan Rp100).
+3. Opsional: isi kolom keterangan jika diperlukan.
+4. Klik **Proses Setoran**. Transaksi dikirim via `POST /api/teller/deposits` beserta header `Idempotency-Key`.
+5. Dialog struk transaksi (`TransactionReceipt`) otomatis muncul dengan opsi cetak / simpan PDF.
+
+### Tarik tunai & Otorisasi PIN
+Bergantung pada konfigurasi `withdrawal_verification` di backend:
+
+- **Mode A (Persetujuan Aplikasi - Bawaan):**
+  1. Masukkan nominal penarikan. Sistem memeriksa kecukupan saldo (saldo minimum Rp10.000 harus tetap tersisa) dan memastikan nasabah sudah mengaktifkan aplikasi.
+  2. Klik **Minta Persetujuan Nasabah**. Aplikasi memanggil `POST /api/teller/withdrawal-authorizations`.
+  3. Dialog polling (`WithdrawalApproval`) muncul, menghitung mundur 120 detik sambil memeriksa status persetujuan ke server setiap 2 detik.
+  4. Nasabah menyetujui transaksi di ponselnya dengan memasukkan PIN.
+  5. Begitu status berubah menjadi `approved`, teller mengklik tombol **Selesaikan Penarikan** (`POST .../complete`) dan menyerahkan uang fisik.
+- **Mode B (PIN di Terminal Loket):**
+  - Jika mode terminal diaktifkan, dialog meminta nasabah mengetikkan 6 digit PIN langsung di layar teller sebelum memproses `POST /api/teller/withdrawals`.
+
+## 3. Riwayat Transaksi & Koreksi (`/teller/transactions`)
+
+Layar ini menampilkan seluruh transaksi yang dicatat oleh teller pada shift hari ini.
+
+- **Cetak Ulang Struk:** Klik tombol struk pada baris transaksi untuk membuka dialog PDF struk.
+- **Koreksi Transaksi:**
+  - Jika teller melakukan kesalahan nominal atau akun, klik tombol **Koreksi**.
+  - Dialog koreksi (`CorrectionDialog`) mewajibkan **Supervisor** hadir di tempat untuk memasukkan username dan password supervisor mereka.
+  - Alasan koreksi wajib diisi (minimal 10 karakter).
+  - Permintaan dikirim via `POST /api/teller/transactions/{id}/correct`. Sistem membuat transaksi pembalik otomatis.
+
+## 4. Menutup Shift Kas (`/teller/close`)
+
+Di akhir jam layanan bank, teller wajib menutup shift dan mempertanggungjawabkan uang fisik:
+
+<Steps>
+
+1. Buka menu **Tutup Shift**. Halaman menampilkan ringkasan saldo pembukuan sistem (`system_balance`), total setoran, dan total penarikan.
+2. Masukkan rincian fisik uang di laci kas ke dalam tabel pecahan penutupan.
+3. Aplikasi menghitung selisih (`difference = physical_balance - system_balance`).
+4. Jika terdapat selisih fisik, teller wajib mengisi penjelasan di kolom catatan penutupan.
+5. Klik **Kirim Laporan Harian**. Aplikasi memanggil `POST /api/teller/shift/close`.
+6. Status shift berganti menjadi `submitted` dan menunggu review serta persetujuan supervisor.
+
+</Steps>
+
+Terkait: [Alur shift teller](/workflows/shift-management/) · [Alur setor tunai](/workflows/deposit/) · [Alur persetujuan penarikan](/workflows/withdrawal-pin-authorization/) · [Alur koreksi](/workflows/correction/)

@@ -2,11 +2,16 @@
   "backend": {
     "dir": "../bank-mini-laravel",
     "sourcePrefix": "",
-    "commit": "4610046"
+    "commit": "c3bf9d9"
   },
   "frontend": {
     "dir": "../bank_mini",
     "sourcePrefix": "bank_mini/",
-    "commit": "4ac5d79"
+    "commit": "50c76d9"
+  },
+  "mobile": {
+    "dir": "../bank-mini-mobile",
+    "sourcePrefix": "bank-mini-mobile/",
+    "commit": "5302862"
   }
 }

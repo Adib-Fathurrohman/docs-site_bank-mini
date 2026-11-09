@@ -12,7 +12,7 @@ sources:
 import { Aside } from '@astrojs/starlight/components';
 
 **Model:** `App\Models\Customer` (`customers` table, no `role` value). **Client:**
-customer mobile app. **Logs in with:** NIS or account number + 6-digit PIN.
+customer mobile app. **Logs in with:** Firebase (Google or Email/Password), activates via NIS.
 
 Every customer endpoint is scoped to the token's account. Parameters such as
 `?customer_id=` are ignored.
@@ -26,9 +26,12 @@ Every customer endpoint is scoped to the token's account. Parameters such as
 | View their statement with filters, and one transaction | `GET /api/customer/transactions`, `/{id}` |
 | Download their own statement PDF | `GET /api/customer/statement/export` |
 | Show a digital card (QR payload) for the teller to scan | `GET /api/customer/card` |
+| Unlock app session with PIN | `POST /api/customer/unlock` |
+| Initial PIN setup (post-activation / reset) | `POST /api/customer/pin/setup` |
 | Change their PIN | `POST /api/customer/pin` |
 | View, approve (with the PIN) or reject withdrawal requests for their own account | `/api/customer/withdrawal-authorizations…` |
-| Log out | `POST /api/customer/logout` |
+| Log out on this device | `POST /api/customer/logout` |
+| Log out across all devices | `POST /api/customer/logout-all` |
 
 ## Cannot
 
@@ -44,8 +47,8 @@ Every customer endpoint is scoped to the token's account. Parameters such as
 | `inactive` (graduated) | — | — | — |
 
 <Aside type="caution" title="Shared PIN lock">
-Three wrong PINs in a row, at login, withdrawal approval or PIN change, lock the PIN
-for 15 minutes everywhere. There is no self-service forgot-PIN; the admin resets it.
+Three wrong PINs in a row, at app unlock, withdrawal approval, counter withdrawal or PIN change, lock the PIN
+for 15 minutes everywhere. There is no self-service forgot-PIN; an admin resets it via API.
 </Aside>
 
 Related: [PIN approval](/en/workflows/withdrawal-pin-authorization/) ·

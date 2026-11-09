@@ -10,6 +10,7 @@ sources:
   - app/Services
   - docs/FRONTEND_HANDOFF.md
   - docs/AUTH.md
+  - docs/CUSTOMER_AUTH.md
 ---
 
 import { Aside, FileTree } from '@astrojs/starlight/components';
@@ -22,27 +23,34 @@ The system is one backend and two clients. The backend has no web UI of its own
 available as a **JSON REST API** under `/api`.
 
 <Mermaid
-	caption="System components. Dashed lines: clients that are not finished."
+	caption="System components. Customers authenticate with Firebase, exchanging the ID token for a Sanctum session."
 	chart={`flowchart TB
   subgraph clients["Clients"]
     direction LR
     web["Staff web app<br/>React<br/>Admin · Supervisor · Teller"]
     mobile["Customer mobile app<br/>React Native + Expo<br/>Students"]
   end
+  subgraph auth["Identity Provider"]
+    firebase["Firebase Authentication<br/>Google OAuth & Email/Password"]
+  end
   subgraph server["Laravel 13 backend"]
     direction TB
-    routes["routes/api.php<br/>67 routes"]
+    routes["routes/api.php<br/>72 routes"]
     mw["Middleware<br/>auth:sanctum · staff · customer · throttle"]
     ctrl["Controller + Form Request"]
     svc["Services<br/>business rules · DB transactions"]
+    fb_svc["KreaitFirebaseAuth<br/>ID token verification"]
     res["API Resources<br/>JSON response shape"]
     pdf["DomPDF<br/>receipts & reports"]
     sched["Scheduler<br/>prune tokens · expire authorizations"]
   end
   db[("MariaDB · InnoDB<br/>FK RESTRICT · CHECK")]
-  web -. "Bearer token" .-> routes
-  mobile -. "Bearer token" .-> routes
+  mobile -->|"Sign-In SDK"| firebase
+  firebase -.->|"ID Token"| mobile
+  web -- "Bearer token (Sanctum)" --> routes
+  mobile -- "Bearer token (Sanctum)" --> routes
   routes --> mw --> ctrl --> svc --> db
+  ctrl --> fb_svc
   ctrl --> res
   svc --> pdf
   sched --> db`}
@@ -86,13 +94,14 @@ services.
 
 <FileTree>
 - app/
+  - Contracts/ FirebaseAuth
   - Enums/ statuses, roles, transaction types, account codes
-  - Exceptions/ BankingException and its subclasses
+  - Exceptions/ BankingException, CustomerAuthException, PinNotSetException
   - Http/
     - Controllers/API/
       - Admin/ CustomerController, StaffController
       - Audit/ JournalController, TransactionController
-      - Customer/ AccountController, AuthController, WithdrawalAuthorizationController
+      - Customer/ AccountController, ActivationController, AuthController, WithdrawalAuthorizationController
       - Staff/ AuthController
       - Supervisor/ CashTransferController, DailyReportController
       - Teller/ CustomerLookupController, DailyReportController, ShiftController, TransactionController, WithdrawalAuthorizationController
@@ -104,7 +113,7 @@ services.
     - Requests/
     - Resources/
   - Models/
-  - Services/
+  - Services/ CustomerActivationService, CustomerAuthService, CustomerService, PinService, TransactionService, Firebase/
 - config/bank.php
 - database/migrations/
 - routes/

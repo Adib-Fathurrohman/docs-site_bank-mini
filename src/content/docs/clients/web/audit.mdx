@@ -1,0 +1,48 @@
+---
+title: Layar Audit & Laporan
+description: Panduan antarmuka audit — penelusuran log transaksi, jurnal umum entri ganda, neraca saldo, dan ekspor laporan PDF resmi.
+sidebar:
+  order: 5
+sources:
+  - bank_mini/front-end/src/features/audit/AuditLogPage.tsx
+  - bank_mini/front-end/src/features/audit/AuditTransactionPage.tsx
+  - bank_mini/front-end/src/features/audit/JournalPage.tsx
+  - bank_mini/front-end/src/features/audit/ExportsPage.tsx
+  - bank_mini/front-end/src/features/audit/components/AuditTable.tsx
+  - bank_mini/front-end/src/features/audit/queries.ts
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Layar audit (`/audit/*` dan `/reports`) dapat diakses oleh peran **Administrator** dan **Supervisor** untuk memantau integritas keuangan dan menghasilkan laporan resmi.
+
+## 1. Log Jejak Audit Transaksi (`/audit/transactions`)
+
+Halaman ini menyediakan penelusuran audit lengkap atas seluruh transaksi keuangan yang terjadi di bank mini (`GET /api/audit/transactions`):
+- **Filter Pencarian:**
+  - Rentang tanggal (`from` dan `to`, mendukung format tanggal `YYYY-MM-DD` atau waktu `YYYY-MM-DD HH:MM`).
+  - Tipe transaksi: Setor tunai (`deposit`), Tarik tunai (`withdrawal`), Koreksi setoran (`deposit_correction`), atau Koreksi penarikan (`withdrawal_correction`).
+  - Nominal minimum (`min_amount`).
+  - Teller pencatat transaksi.
+- **Tabel Transaksi:** Menampilkan waktu transaksi, nomor transaksi, nama teller, nama & nomor rekening nasabah, jenis mutasi, nominal uang, dan saldo berjalan setelah transaksi.
+- **Detail Transaksi (`/audit/transactions/:id`):** Membuka informasi audit menyeluruh, termasuk kaitan dengan shift laporan harian, pasangan koreksi (jika ada), otorisasi supervisor, dan dua baris jurnal akuntansinya.
+- **Ekspor PDF:** Tombol **Ekspor PDF** untuk mengunduh daftar jejak audit dalam format dokumen cetak resmi.
+
+## 2. Jurnal Akuntansi Entri Ganda (`/audit/journals`)
+
+Menampilkan pencatatan akuntansi sistematis atas setiap transaksi uang (`GET /api/audit/journals`):
+- Setiap transaksi selalu menghasilkan sepasang baris: satu Debit dan satu Kredit dengan nominal yang seimbang.
+- Kode akun standar yang digunakan:
+  - **101 (Kas):** Bertambah di debit saat setoran tunai, berkurang di kredit saat penarikan tunai.
+  - **201 (Tabungan Nasabah):** Kewajiban bank kepada siswa. Bertambah di kredit saat setoran tunai, berkurang di debit saat penarikan tunai.
+- Filter tanggal dan filter kode akun.
+- Tombol **Ekspor Jurnal PDF** untuk mengunduh buku jurnal umum resmi.
+
+## 3. Pusat Ekspor Laporan (`/reports`)
+
+Halaman terpadu untuk mencetak dan mengunduh laporan berkala sekolah:
+- **Laporan Tahunan Bank Mini (`GET /api/reports/annual`):** Dokumen PDF resmi tahunan yang memuat ringkasan eksekutif, rekapitulasi setoran dan penarikan, statistik nasabah per jurusan, dan neraca keuangan.
+- **Laporan Neraca Saldo:** Menampilkan keseimbangan total debit dan kredit pada periode tertentu.
+- **Laporan Mutasi Rekening Nasabah:** Mengunduh salinan rekening koran nasabah tertentu (`GET /api/customers/{id}/statement`).
+
+Terkait: [Jejak audit & akuntansi](/concepts/audit-trail/) · [Referensi API Audit](/api/audit-and-reports/)

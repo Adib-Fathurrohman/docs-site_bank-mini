@@ -7,8 +7,10 @@ sources:
   - app/Http/Controllers/API/Admin/CustomerController.php
   - app/Http/Controllers/API/Admin/StaffController.php
   - app/Services/CustomerService.php
+  - app/Services/PinService.php
   - app/Services/StaffImportService.php
   - docs/WORKFLOWS.md
+  - docs/CUSTOMER_AUTH.md
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -20,10 +22,11 @@ membaca daftar rekening dan staf, tetapi tidak dapat mengubahnya.
 ## Siklus hidup rekening nasabah
 
 <Mermaid
-	caption="Status rekening. Rekening yang ditutup tidak dapat dipulihkan lewat API."
+	caption="Status rekening perbankan dan aktivasi aplikasi nasabah."
 	chart={`stateDiagram-v2
   direction LR
-  [*] --> active: admin membuka rekening (saldo 0)
+  [*] --> active: admin membuka rekening (saldo 0, activation: pending)
+  active --> active: siswa aktivasi via Firebase + NIS (activation: activated)
   active --> suspended: admin menangguhkan
   suspended --> active: admin mengaktifkan
   active --> inactive: admin menutup (lulus)
@@ -31,6 +34,7 @@ membaca daftar rekening dan staf, tetapi tidak dapat mengubahnya.
   inactive --> [*]
   note right of inactive
     soft delete · token dicabut
+    user Firebase dinonaktifkan
     riwayat tetap utuh
   end note`}
 />
@@ -41,33 +45,58 @@ membaca daftar rekening dan staf, tetapi tidak dapat mengubahnya.
 | --- | --- |
 | Endpoint | `POST /api/admin/customers` |
 | Prasyarat | Jurusan ada (`GET /api/majors`) |
-| Input | `nis`, `full_name`, `class` (`X`/`XI`/`XII`), `major_id`, `group` (`1`–`4`), `pin` (6 digit) |
-| Proses | `CustomerService::create` membuat nomor `{KODE}-{TAHUN}-{URUT}` (coba ulang hingga 3 kali jika bentrok) |
-| Efek database | Baris `customers`: status `active`, saldo `0`, PIN di-hash |
-| Respons | `201` Customer |
-| Gagal | `422` validasi (NIS sudah dipakai, termasuk rekening yang ditutup); `403` bukan admin |
+| Input | `nis`, `full_name`, `email` (wajib, unik), `class` (`X`/`XI`/`XII`), `major_id`, `group` (`1`–`4`) |
+| Aturan PIN | Admin **tidak menetapkan PIN**. Mengirim field `pin` ditolak `422`. PIN dibuat siswa setelah aktivasi |
+| Proses | `CustomerService::create` membuat nomor `{KODE}-{TAHUN}-{URUT}` |
+| Efek database | Baris `customers`: status `active`, status aktivasi `pending`, saldo `0`, `pin` null |
+| Respons | `201` Customer (`activation_status: "pending"`, `pin_set: false`) |
+| Gagal | `422` validasi (NIS atau email sudah dipakai, termasuk rekening yang ditutup); `403` bukan admin |
 
-Saldo awal selalu `0`. Uang hanya masuk lewat teller. Field `account_number`,
-`account_status`, dan `balance` di body diabaikan.
+Saldo awal selalu `0`. Uang dapat langsung disetor di loket teller meskipun nasabah belum mengaktifkan aplikasi.
 
-### Mengubah, menangguhkan, me-reset PIN
+### Impor nasabah dari pembukuan lama
+
+| | |
+| --- | --- |
+| Endpoint | `POST /api/admin/customers/import` |
+| Input | `file` (wajib, `.xlsx`/`.csv`), `transactions_file` (opsional, atau sheet `Transaksi`) |
+| Kapasitas | Maks. 1.000 nasabah dan 10.000 baris transaksi historis |
+| Kolom nasabah | NIS, Nama, Email (opsional), Kelas, Jurusan, Rombel, Saldo (opsional), No Rekening (opsional) |
+| Kolom transaksi | NIS, Tanggal, Jenis (`setor`/`tarik`), Nominal, Keterangan |
+| Saldo awal | Sisa saldo yang tidak dijelaskan oleh riwayat transaksi otomatis dijadikan saldo awal (*"Saldo awal dari pembukuan lama"*) |
+| Efek database | Baris `customers` dibuat massal; transaksi dikaitkan ke `customer_imports` (`daily_report_id: null`) |
+| Transaksi atomik | Gagal total (*all-or-nothing*) jika ada format data salah, NIS duplikat, atau saldo negatif |
+
+
+### Mengubah data dan menangguhkan rekening
 
 | | |
 | --- | --- |
 | Endpoint | `PUT\|PATCH /api/admin/customers/{id}` |
-| Input | Sebagian dari `nis`, `full_name`, `class`, `major_id`, `group`, `account_status` (`active`/`suspended` saja), `pin` |
-| Efek | Jika `pin` dikirim, `pin_failed_attempts` dan `pin_locked_until` juga di-reset (blokir PIN terbuka) |
+| Input | Sebagian dari `nis`, `full_name`, `email`, `class`, `major_id`, `group`, `account_status` (`active`/`suspended` saja) |
+| Aturan email | `email` hanya dapat diubah selama status aktivasi masih `pending`. Setelah diaktifkan, email terkunci (`422`) |
+| Aturan PIN | Mengirim `pin` ditolak `422` (gunakan endpoint reset PIN khusus) |
 | Tidak dapat diubah | Nomor rekening dan saldo. Mengganti jurusan tidak mengganti nomor |
-| Gagal | `422` (misalnya `account_status: inactive`); `404` rekening sudah ditutup |
+| Gagal | `422` validasi; `404` rekening sudah ditutup |
 
-Menangguhkan rekening tidak mencabut token nasabah.
+Menangguhkan rekening tidak mencabut token nasabah, namun nasabah tidak dapat melakukan penarikan.
+
+### Reset PIN nasabah
+
+| | |
+| --- | --- |
+| Endpoint | `POST /api/admin/customers/{id}/pin-reset` |
+| Kapan dipakai | Nasabah lupa PIN |
+| Efek | Mengosongkan kolom `pin`, menyetel `pin_failed_attempts = 0`, dan mengosongkan `pin_locked_until` (blokir terbuka) |
+| Langkah selanjutnya | Nasabah masuk ke aplikasi dengan akun Firebase terdaftar, lalu membuat PIN baru via `POST /api/customer/pin/setup` |
+| Respons | `200` dengan data Customer terbaru (`pin_set: false`) |
 
 ### Menutup rekening (lulus)
 
 | | |
 | --- | --- |
 | Endpoint | `POST /api/admin/customers/{id}/deactivate` |
-| Proses | Satu transaksi database: status `inactive`, hapus semua token nasabah, soft delete |
+| Proses | Satu transaksi database: status `inactive`, hapus semua token nasabah, nonaktifkan user di Firebase, soft delete |
 | Validasi | Tidak ada pemeriksaan saldo |
 | Efek | `deleted_at` terisi. Transaksi dan jurnal tidak berubah |
 | Gagal | `404` jika sudah ditutup |

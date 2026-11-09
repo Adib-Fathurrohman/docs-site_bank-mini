@@ -1,0 +1,94 @@
+---
+title: Teller Screens & Counter Operations
+description: Operational guide for the teller web interface — opening and closing cash shifts, cash deposits, withdrawals, QR scanning, Mode A approvals, and transaction corrections.
+sidebar:
+  order: 2
+sources:
+  - bank_mini/front-end/src/features/teller/TellerLayout.tsx
+  - bank_mini/front-end/src/features/teller/TellerHomePage.tsx
+  - bank_mini/front-end/src/features/teller/OpenShiftForm.tsx
+  - bank_mini/front-end/src/features/teller/CounterPage.tsx
+  - bank_mini/front-end/src/features/teller/QrScanner.tsx
+  - bank_mini/front-end/src/features/teller/TransactionsPage.tsx
+  - bank_mini/front-end/src/features/teller/CloseShiftPage.tsx
+  - bank_mini/front-end/src/features/teller/ShiftDetailPage.tsx
+  - bank_mini/front-end/src/features/teller/ShiftHistoryPage.tsx
+  - bank_mini/front-end/src/features/teller/components/CorrectionDialog.tsx
+  - bank_mini/front-end/src/features/teller/components/DenominationCounter.tsx
+  - bank_mini/front-end/src/features/teller/components/TransactionReceipt.tsx
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+The teller interface (`/teller/*`) is designed for day-to-day school bank counter operations. All money-handling endpoints are protected by an active shift gate.
+
+## 1. Opening a Shift (`/teller`)
+
+Before serving students at the counter, tellers must open today's shift:
+
+<Steps>
+
+1. Open `/teller`. If no shift is open today, the **Open Shift** form is presented automatically.
+2. Count the opening physical drawer cash using the cash denomination table (`DenominationCounter`):
+   - Enter counts for each Indonesian rupiah denomination (Rp100,000, Rp50,000, ..., Rp100).
+   - The system calculates the opening cash balance in real time.
+3. Click **Open Shift**, submitting `POST /api/teller/shift/open`.
+4. Once opened, the navbar pill turns green (`Open Shift`), unlocking the counter routes.
+
+</Steps>
+
+## 2. Service Counter (`/teller/counter`)
+
+The counter page is the primary operational hub.
+
+### Customer lookup
+- **Webcam QR Scanning:** Using `QrScanner`, hold a student ID card or mobile digital card in front of the camera. The `BANKMINI:{account_number}` payload is decoded instantly.
+- **Manual Search:** Tellers can type the student's NIS or account number directly into the search bar.
+- Upon retrieval, the `CustomerPanel` displays student identity, class, major, live balance, account status, and app activation status.
+
+### Cash deposit
+1. Select the **Deposit** tab.
+2. Enter the amount (must be a multiple of Rp100).
+3. Optionally add a deposit note.
+4. Click **Process Deposit**. The request is dispatched via `POST /api/teller/deposits` with a client-generated `Idempotency-Key` header.
+5. The transaction receipt dialog (`TransactionReceipt`) appears with an option to print or save the receipt PDF.
+
+### Cash withdrawal & PIN authorization
+Depending on the configured `withdrawal_verification` mode:
+
+- **Mode A (Mobile App Approval - Default):**
+  1. Enter the withdrawal amount. Pre-checks verify that the remaining balance will satisfy the minimum balance threshold (Rp10,000) and that the student has activated their mobile app.
+  2. Click **Request Customer Approval**. The client posts to `POST /api/teller/withdrawal-authorizations`.
+  3. The `WithdrawalApproval` polling modal opens, counting down 120 seconds while checking status every 2 seconds.
+  4. The student approves the prompt on their personal smartphone by entering their PIN.
+  5. Once the status transitions to `approved`, the teller clicks **Complete Withdrawal** (`POST .../complete`) and disburses cash.
+- **Mode B (Counter Terminal PIN):**
+  - If terminal mode is enabled, the customer enters their 6-digit PIN on the teller's screen before the teller dispatches `POST /api/teller/withdrawals`.
+
+## 3. Transactions & Corrections (`/teller/transactions`)
+
+Lists all transactions recorded by the teller during the current shift.
+
+- **Reprint Receipt:** Click the receipt icon on any row to open the receipt preview and download the PDF.
+- **Transaction Correction:**
+  - If an error was made in amount or account, click **Correct**.
+  - The `CorrectionDialog` requires an active **Supervisor** on-site to input their supervisor username and password.
+  - A descriptive explanation (minimum 10 characters) is required.
+  - The request calls `POST /api/teller/transactions/{id}/correct`, creating an immutable reversal transaction.
+
+## 4. Closing the Shift (`/teller/close`)
+
+At the conclusion of service hours, tellers reconcile and close their shift:
+
+<Steps>
+
+1. Navigate to **Close Shift**. The page outlines system calculated balances (`system_balance`), total deposits, and total withdrawals.
+2. Enter the final physical cash counts into the denomination breakdown table.
+3. The interface calculates cash discrepancies (`difference = physical_balance - system_balance`).
+4. If a difference exists, the teller must explain it in the closing remarks field.
+5. Click **Submit Daily Report**, which dispatches `POST /api/teller/shift/close`.
+6. Shift status becomes `submitted`, awaiting supervisor review and vault transfer.
+
+</Steps>
+
+Related: [Shift management workflow](/en/workflows/shift-management/) · [Deposit workflow](/en/workflows/deposit/) · [Withdrawal PIN workflow](/en/workflows/withdrawal-pin-authorization/) · [Correction workflow](/en/workflows/correction/)

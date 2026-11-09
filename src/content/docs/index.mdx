@@ -67,7 +67,7 @@ laporan harian setiap teller sebelum kas berpindah ke brankas.
 	/>
 	<LinkCard
 		title="Referensi API"
-		description="67 endpoint dengan parameter, aturan validasi, contoh respons, dan error."
+		description="83 endpoint dengan parameter, aturan validasi, contoh respons, dan error."
 		href="/api/"
 	/>
 	<LinkCard
@@ -87,16 +87,16 @@ laporan harian setiap teller sebelum kas berpindah ke brankas.
 | Anda adalah | Baca terlebih dahulu |
 | --- | --- |
 | Pengembang backend | [Instalasi](/getting-started/installation/) → [Arsitektur](/concepts/architecture/) → [Skema database](/reference/database-schema/) → [Service](/reference/models-and-services/) |
-| Pengembang aplikasi web staf (React) | [Autentikasi](/workflows/authentication/) → [Peran & hak akses](/concepts/roles-and-permissions/) → [Referensi API](/api/) → [Error](/api/errors/) |
-| Pengembang aplikasi mobile nasabah (Expo) | [Autentikasi](/workflows/authentication/) → [API Nasabah](/api/customer/) → [Persetujuan PIN](/workflows/withdrawal-pin-authorization/) |
-| Penguji atau pembimbing UKK | [Pengenalan](/getting-started/introduction/) → [Siklus transaksi](/concepts/transaction-lifecycle/) → [Jejak audit](/concepts/audit-trail/) → [Keamanan](/reference/security/) |
+| Pengguna / pengembang aplikasi web staf (React) | [Panduan Web](/clients/web/overview/) → [Layar Teller](/clients/web/teller/) → [Layar Supervisor](/clients/web/supervisor/) → [Layar Admin](/clients/web/admin/) |
+| Pengguna / pengembang aplikasi mobile nasabah (Expo) | [Panduan Mobile](/clients/mobile/overview/) → [Autentikasi & Aktivasi](/clients/mobile/auth-and-activation/) → [Layanan Nasabah](/clients/mobile/banking/) |
+| Penguji atau pembimbing UKK | [Pengenalan](/getting-started/introduction/) → [Status Aplikasi](/clients/) → [Siklus transaksi](/concepts/transaction-lifecycle/) → [Jejak audit](/concepts/audit-trail/) |
 
 ## Status komponen
 
-Dokumentasi ini hanya menjelaskan fitur yang dapat diverifikasi dari kode.
+Dokumentasi ini menjelaskan fitur dan integrasi yang telah selesai diimplementasikan (**Completed**) pada seluruh komponen ekosistem:
 
 | Komponen | Status | Keterangan |
 | --- | --- | --- |
-| Backend Laravel (REST API) | <Badge text="Selesai" variant="success" /> | 67 route, diuji otomatis. Didokumentasikan lengkap di situs ini |
-| Aplikasi web staf (React) | <Badge text="Dalam pengembangan" variant="caution" /> | Repositori terpisah. Dokumentasinya ditunda sampai aplikasinya selesai |
-| Aplikasi mobile nasabah (Expo) | <Badge text="Belum dimulai" variant="note" /> | Belum ada repositori. Lihat [Aplikasi klien](/clients/) |
+| Backend Laravel (REST API) | <Badge text="Selesai" variant="success" /> | 83 route, diuji otomatis. Didokumentasikan lengkap di [Referensi API](/api/) |
+| Aplikasi web staf (React) | <Badge text="Selesai" variant="success" /> | Repositori `bank_mini` (React 19 + Vite 8). Portal operasional loket di `https://bank.rumput.tech`. Panduan di [Aplikasi Web Staf](/clients/web/overview/) |
+| Aplikasi mobile nasabah (Expo) | <Badge text="Selesai" variant="success" /> | Repositori `bank-mini-mobile` (Expo SDK 53 + React Native). Rilis APK Android & Web, integrasi Firebase & FCM. Panduan di [Aplikasi Mobile](/clients/mobile/overview/) |

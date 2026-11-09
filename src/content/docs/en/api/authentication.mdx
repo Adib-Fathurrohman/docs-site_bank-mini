@@ -1,35 +1,42 @@
 ---
 title: Authentication
-description: The single login endpoint for all four actors, the current user, and logout.
+description: Login endpoints for staff and customers (Firebase), customer account activation, current user profiles, and logout.
 sidebar:
   order: 2
 sources:
   - routes/api.php
   - app/Http/Controllers/API/LoginController.php
-  - app/Http/Requests/Auth
+  - app/Http/Controllers/API/StaffAuthController.php
+  - app/Http/Controllers/API/Customer/AuthController.php
+  - app/Http/Controllers/API/Customer/ActivationController.php
+  - app/Http/Requests/Auth/StaffLoginRequest.php
+  - app/Http/Requests/Auth/FirebaseLoginRequest.php
+  - app/Http/Requests/Customer/ActivateRequest.php
   - docs/API.md
   - docs/AUTH.md
+  - docs/CUSTOMER_AUTH.md
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 import Endpoint from '../../../../components/Endpoint.astro';
 
-The full flow and rules are in [Login and sessions](/en/workflows/authentication/).
+Full architecture and flows are documented in [Authentication and session](/en/workflows/authentication/)
+and the backend's `docs/CUSTOMER_AUTH.md`.
 
-## Login
+## Single login gateway
 
-<Endpoint method="POST" path="/api/login" limit="5/min per username/identifier + IP" />
+<Endpoint method="POST" path="/api/login" limit="5 per minute per username/identifier + IP (staff) or 30 per minute per IP (customer id_token)" />
 
-The single entry point for all four roles. Send **one** set of credentials;
-`data.actor` tells the client which portal to open.
+The single entry point for all roles. Send either staff credentials (`username` + `password`)
+or a customer Firebase ID token (`id_token`). The `data.actor` field indicates which portal to open.
 
-| Field | Rules |
+| Field | Rule |
 | --- | --- |
 | `username`, `password` | Staff: required together. `username` max 255 |
-| `identifier`, `pin` | Customer: NIS or account number (max 50) and a PIN of exactly 6 digits |
+| `id_token` | Customer: Firebase Authentication ID token string (Google or email/password) |
 
-If `username` is filled the staff login runs; otherwise, if `identifier` is filled,
-the customer login runs; if both are empty, `422`.
+If `username` is present, staff authentication runs. If `id_token` is present, customer Firebase
+authentication runs. If neither is provided, the server returns `422`.
 
 ```http
 POST /api/login
@@ -39,7 +46,7 @@ Content-Type: application/json
 { "username": "teller", "password": "password" }
 ```
 
-```json title="200 (staff) — example from the demo database"
+```json title="200 (staff) — demo database example"
 {
   "data": {
     "actor": "staff",
@@ -54,55 +61,123 @@ Content-Type: application/json
 }
 ```
 
-**200 (customer):** `actor` is `"customer"` and `data.customer` is a
-[Customer](/en/api/admin/#customer-object) object.
-
-**422:** wrong credentials (`Username atau password salah.` /
-`NIS/nomor rekening atau PIN salah.`), blocked staff, closed account, locked PIN, or no
-credentials:
-
-```json
+```json title="200 (customer) — demo database example"
 {
-  "message": "Isi username dan password (staf) atau NIS/nomor rekening dan PIN (nasabah).",
-  "errors": { "username": ["Isi username dan password (staf) atau NIS/nomor rekening dan PIN (nasabah)."] }
+  "data": {
+    "actor": "customer",
+    "token": "12|5pJ...",
+    "token_type": "Bearer",
+    "expires_at": "2026-12-02T02:00:00.000000Z",
+    "customer": {
+      "id": 1,
+      "account_number": "RPL-2026-001",
+      "nis": "20260001",
+      "full_name": "Budi Santoso",
+      "email": "budi.santoso@example.test",
+      "activation_status": "activated",
+      "activated_at": "2026-11-02T01:00:00.000000Z",
+      "pin_set": true,
+      "class": "X",
+      "group": "1",
+      "major": { "id": 1, "code": "RPL", "major_name": "Rekayasa Perangkat Lunak" },
+      "account_status": "active",
+      "balance": 500000,
+      "created_at": "2026-10-27T13:10:33.000000Z",
+      "updated_at": "2026-11-02T01:00:00.000000Z",
+      "deleted_at": null
+    }
+  }
 }
 ```
 
-A wrong PIN counts toward the shared PIN lock, but login does not reveal the remaining
-attempts. Once locked, the message is
-`Terlalu banyak percobaan PIN salah. Coba lagi pukul 09:15.` (local time).
+If neither credential set is supplied:
 
-### Aliases
+```json title="422 Unprocessable Entity"
+{
+  "message": "Isi username dan password (staf), atau masuk dengan akun Google/email (nasabah).",
+  "errors": {
+    "username": ["Isi username dan password (staf), atau masuk dengan akun Google/email (nasabah)."]
+  }
+}
+```
 
-<Endpoint method="POST" path="/api/staff/login" limit="5/min per username/identifier + IP" />
+## Portal-specific logins
 
-<Endpoint method="POST" path="/api/customer/login" limit="5/min per username/identifier + IP" />
+<Endpoint method="POST" path="/api/staff/login" limit="5 per minute per username + IP" />
 
-Aliases that accept only their own kind of body. Use `POST /api/login` only
-(note I2).
+Accepts only staff credentials: `{ "username": "...", "password": "..." }`.
+
+<Endpoint method="POST" path="/api/customer/auth/login" limit="30 per minute per IP" />
+
+Dedicated customer sign-in endpoint using a Firebase ID token:
+
+```json
+{ "id_token": "<firebase-id-token>" }
+```
+
+A `200` response matches the customer login format above. If the account has not been activated or the token is refused, structured error codes are returned:
+
+| Status | `code` | Cause |
+| --- | --- | --- |
+| 401 | `firebase_token_invalid` | Bad signature, expired, revoked, or disabled Firebase account |
+| 403 | `account_not_linked` | Firebase user is not bound to any Bank Mini customer yet (prompt user to activate with NIS) |
+| 403 | `provider_not_allowed` | Sign-in provider other than `password` or `google.com` |
+| 403 | `email_not_verified` | Email address on the Firebase token is not verified |
+| 403 | `account_inactive` | Bank Mini account has been closed |
+| 503 | `auth_unavailable` | Firebase service is unreachable or unconfigured |
+
+## Customer account activation
+
+<Endpoint method="POST" path="/api/customer/activation" limit="20 per minute per IP" />
+
+Public endpoint to bind a Firebase identity to a customer account for the first time, verified by NIS:
+
+```json
+{
+  "nis": "20260001",
+  "id_token": "<firebase-id-token>"
+}
+```
+
+The verified email on the Firebase token must match the email registered by the administrator.
+
+**200 OK:** Returns the standard customer login payload (`activation_status: "activated"`, `pin_set: false`). The client then prompts the customer to create their PIN via `POST /api/customer/pin/setup`.
+
+Refusal error codes:
+
+| Status | `code` | Cause |
+| --- | --- | --- |
+| 403 | `activation_mismatch` | NIS not found or email does not match registered record (anti-enumeration message) |
+| 403 | `email_not_verified` | Email is not verified in Firebase |
+| 403 | `account_inactive` | Bank account is closed |
+| 409 | `already_activated` | Customer account is already bound to a different Firebase user |
+| 409 | `identity_already_linked` | This Firebase user is already bound to another customer account |
 
 ## Staff
 
 <Endpoint method="GET" path="/api/staff/me" roles="admin,supervisor,teller" />
 
-The logged-in staff member: `{ "data": Staff }`. Call it when the app loads to
-validate a stored token.
+Current authenticated staff member: `{ "data": Staff }`. Call on app startup to validate stored tokens.
 
 <Endpoint method="POST" path="/api/staff/logout" roles="admin,supervisor,teller" />
 
-Revokes the token used: `200 { "message": "Berhasil keluar." }`.
+Revokes the active bearer token: `200 { "message": "Berhasil keluar." }`.
 
 ## Customer
 
 <Endpoint method="GET" path="/api/customer/me" roles="customer" />
 
-The logged-in customer: `{ "data": Customer }` with their major.
+Current authenticated customer: `{ "data": Customer }` with major relation.
 
 <Endpoint method="POST" path="/api/customer/logout" roles="customer" />
 
-Revokes the token used: `200 { "message": "Berhasil keluar." }`.
+Revokes the active bearer token on this device: `200 { "message": "Berhasil keluar." }`.
 
-<Aside type="note" title="Tokens">
-Tokens last 480 minutes from creation (absolute). The login response does not include
-the expiry time and there is no refresh endpoint. An expired token returns `401`.
+<Endpoint method="POST" path="/api/customer/logout-all" roles="customer" />
+
+Revokes **all** Sanctum tokens across all devices for this customer: `200 { "message": "Berhasil keluar dari semua perangkat." }`.
+
+<Aside type="note" title="Session lifetimes">
+Staff tokens are valid for **480 minutes** (8 hours) per `SANCTUM_EXPIRATION`. Customer sessions last **43,200 minutes** (30 days)
+per `CUSTOMER_SESSION_MINUTES`, and include the explicit expiration timestamp in `expires_at` upon login.
 </Aside>

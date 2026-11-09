@@ -1,56 +1,99 @@
 ---
 title: Status aplikasi klien
-description: Status aplikasi web staf dan aplikasi mobile nasabah, serta rencana dokumentasinya.
-status: coming-soon
+description: Status implementasi aplikasi web staf dan aplikasi mobile nasabah serta panduan penggunaannya.
 sidebar:
   order: 1
   label: Status
-  badge:
-    text: Segera
-    variant: caution
 sources:
   - docs/FRONTEND_HANDOFF.md
-  - bank_mini/front-end/README.md
+  - bank_mini/README.md
+  - bank_mini/package.json
+  - bank_mini/src/App.tsx
+  - bank-mini-mobile/README.md
+  - bank-mini-mobile/package.json
 ---
 
-import { Aside, Badge } from '@astrojs/starlight/components';
+import { Aside, Badge, Card, CardGrid } from '@astrojs/starlight/components';
 
-Dokumentasi aplikasi klien **ditunda** sampai aplikasinya selesai. Halaman ini hanya
-mencatat status yang dapat diverifikasi dan apa yang akan ditambahkan nanti. Tidak ada
-tata letak, layar, atau interaksi yang dijelaskan di sini, karena belum final.
+Halaman ini merangkum status kesiapan seluruh komponen aplikasi Bank Mini (aplikasi web staf, aplikasi nasabah, API backend, dan situs dokumentasi) beserta konfigurasi domain produksi.
 
-## Status
+## Status implementasi komponen
 
-| Aplikasi | Pengguna | Status | Keterangan |
-| --- | --- | --- | --- |
-| Aplikasi web staf (React) | Admin, Supervisor, Teller | <Badge text="Dalam pengembangan" variant="caution" /> | Repositori terpisah (`bank_mini/front-end`). Vite, React 19, TypeScript, React Router, TanStack Query, Tailwind CSS 4, Vitest |
-| Aplikasi mobile nasabah (React Native + Expo) | Nasabah | <Badge text="Belum dimulai" variant="note" /> | Belum ada repositori |
+Seluruh komponen dalam ekosistem Bank Mini telah selesai diimplementasikan (**Completed**) dan siap digunakan pada lingkungan produksi:
 
-<Aside type="caution" title="Jangan berasumsi">
-Backend menyediakan 67 endpoint, tetapi itu **tidak berarti** setiap endpoint sudah
-dipakai oleh aplikasi klien. Status per fitur akan dicatat saat dokumentasi klien
-ditulis.
+| Komponen | Pengguna | Status | Lingkungan & URL Produksi | Keterangan |
+| --- | --- | --- | --- | --- |
+| **Aplikasi Web Staf** (React) | Admin, Supervisor, Teller | <Badge text="Selesai" variant="success" /> | `https://bank.rumput.tech` | Repositori `bank_mini`. Vite 8, React 19, TypeScript, React Router 8, TanStack Query 5, Tailwind CSS 4, Vitest |
+| **Aplikasi Nasabah** (Expo & React Native) | Siswa (Nasabah) | <Badge text="Selesai" variant="success" /> | `https://app.rumput.tech` & APK Android | Repositori `bank-mini-mobile`. Expo SDK, React Native, Firebase Auth (Google Sign-In), FCM Push, SecureStore |
+| **Backend REST API** (Laravel 12) | Klien Web & Mobile | <Badge text="Selesai" variant="success" /> | `https://bank.rumput.tech/api` *(lihat rekomendasi)* | Repositori `bank-mini-laravel`. 83 endpoint RESTful JSON, Sanctum, FCM Notifier, DomPDF |
+| **Situs Dokumentasi** (Astro Starlight) | Pengembang & Penguji | <Badge text="Selesai" variant="success" /> | `https://docs-bank.rumput.tech` | Repositori `docs-site`. Panduan dwibahasa (ID & EN), pencarian instan, ekspor PDF 140 halaman |
+
+## Alamat URL produksi
+
+Setiap layanan diarahkan ke domain pada VPS (`rumput.tech`):
+
+- **Aplikasi Staf:** [https://bank.rumput.tech](https://bank.rumput.tech) — portal operasional loket teller, supervisor review, administrasi bank, dan audit.
+- **Aplikasi Nasabah (PWA / Web):** [https://app.rumput.tech](https://app.rumput.tech) — portal digital nasabah untuk cek saldo, mutasi, kartu QR, dan persetujuan penarikan. Rilis Android APK tersedia melalui GitHub Releases repositori `bank-mini-mobile`.
+- **Situs Dokumentasi Teknis:** [https://docs-bank.rumput.tech](https://docs-bank.rumput.tech) — buku panduan arsitektur sistem, referensi 83 API endpoint, skema basis data, dan tata kelola perbankan.
+
+<Aside type="tip" title="Rekomendasi URL API Backend">
+Saat ini backend Laravel diakses melalui reverse-proxy pada origin yang sama dengan aplikasi web: `https://bank.rumput.tech/api` (dan `https://app.rumput.tech/api`).
+
+Untuk konfigurasi subdomain mandiri (*dedicated API domain*):
+1. **Pilihan Utama (Direkomendasikan): `https://api-bank.rumput.tech`**
+   - Mengikuti pola penamaan *flat single-level subdomain* yang konsisten dengan `docs-bank.rumput.tech`.
+   - Penerbitan sertifikat SSL Let's Encrypt / Certbot sangat mudah tanpa memerlukan sertifikat multi-level atau wildcard khusus.
+2. **Alternatif Hierarkis: `https://api.bank.rumput.tech`**
+   - Standar industri sub-subdomain (`api.<app>.<domain>`), rapi secara struktur hirarki.
+3. **Konfigurasi CORS:** Jika menggunakan subdomain API terpisah, pastikan file konfigurasi `.env` Laravel mengatur `SANCTUM_STATEFUL_DOMAINS=bank.rumput.tech,app.rumput.tech` dan CORS `allowed_origins` mencakup `https://bank.rumput.tech` dan `https://app.rumput.tech`.
 </Aside>
 
-## Yang dapat dipakai pengembang klien sekarang
+## Dokumentasi aplikasi web staf
 
-- [Login dan sesi](/workflows/authentication/): alur login, token, dan penanganan
-  `401`/`403`.
-- [Peran dan hak akses](/concepts/roles-and-permissions/): matriks untuk route guard.
-- [Referensi API](/api/) dan [Error](/api/errors/).
-- [Persetujuan PIN di aplikasi](/workflows/withdrawal-pin-authorization/): kontrak
-  polling antara klien teller dan aplikasi nasabah.
-- Di repositori backend: `docs/FRONTEND_HANDOFF.md` dan `docs/UI_REQUIREMENTS.md`
-  (kebutuhan fungsional per peran yang didukung API; bukan desain antarmuka).
+Aplikasi web staf telah selesai dibangun dan terhubung penuh ke route backend. Rincian layar dan panduan operasional per peran dapat dipelajari pada subbagian berikut:
 
-## Rencana dokumentasi
+<CardGrid>
+  <Card title="Memulai & Arsitektur Web" icon="rocket">
+    Konfigurasi environment `VITE_API_BASE_URL`, stack teknologi, penyimpanan sesi token di `sessionStorage`, dan penanganan error 401/403.
+    [Buka panduan web](/clients/web/overview/)
+  </Card>
+  <Card title="Layar & Operasional Teller" icon="laptop">
+    Buka/tutup shift loket, penghitung pecahan kas fisik, transaksi setor/tarik tunai, pemindai QR, persetujuan Mode A, dan otorisasi koreksi supervisor.
+    [Buka panduan teller](/clients/web/teller/)
+  </Card>
+  <Card title="Layar Supervisor" icon="approve-check-circle">
+    Pemeriksaan dan review laporan harian shift teller (setuju/tahan/tolak), mutasi kas brankas utama, dan otorisasi koreksi di loket teller.
+    [Buka panduan supervisor](/clients/web/supervisor/)
+  </Card>
+  <Card title="Layar Administrator" icon="setting">
+    Pengaturan sistem bank, pembuatan dan impor staf dari Excel/CSV, pendaftaran rekening nasabah (tanpa PIN), reset PIN, cetak kartu QR, dan kelulusan massal.
+    [Buka panduan admin](/clients/web/admin/)
+  </Card>
+  <Card title="Layar Audit & Laporan" icon="document">
+    Penelusuran jejak audit transaksi dengan filter terperinci, tampilan jurnal akuntansi debit/kredit, dan pengunduhan ekspor laporan PDF resmi.
+    [Buka panduan audit](/clients/web/audit/)
+  </Card>
+</CardGrid>
 
-Bagian ini akan berisi dua subbagian. Halaman baru cukup ditambahkan sebagai file MDX di
-folder yang sesuai; sidebar membuatnya otomatis.
+## Dokumentasi aplikasi mobile nasabah (Android)
 
-| Folder | Topik yang direncanakan |
-| --- | --- |
-| `clients/web/` | Menjalankan aplikasi web, konfigurasi (`VITE_API_BASE_URL`), struktur proyek, autentikasi dan penyimpanan sesi, panduan per peran |
-| `clients/mobile/` | Menjalankan aplikasi Expo, konfigurasi (`EXPO_PUBLIC_API_BASE_URL`), penyimpanan token aman, layar persetujuan penarikan, panduan nasabah |
+Aplikasi mobile nasabah dibangun menggunakan Expo SDK dan React Native yang ditargetkan untuk perangkat Android (rilis APK mandiri) serta pratinjau web. Panduan lengkap arsitektur dan alur kerja nasabah dapat dipelajari pada subbagian berikut:
 
-Topik di atas adalah rencana, bukan fitur yang sudah ada.
+<CardGrid>
+  <Card title="Memulai & Arsitektur Android" icon="rocket">
+    Struktur project Expo, konfigurasi Firebase (`google-services.json`), izin runtime Android 13+, variabel lingkungan, dan pembuatan paket rilis APK mandiri.
+    [Buka panduan Android](/clients/mobile/overview/)
+  </Card>
+  <Card title="Autentikasi & Aktivasi Akun" icon="forward-slash">
+    Autentikasi Firebase siswa, aktivasi rekening menggunakan NIS sekolah, pembuatan PIN 6 digit mandiri, dan penguncian sesi privasi otomatis.
+    [Buka panduan autentikasi](/clients/mobile/auth-and-activation/)
+  </Card>
+  <Card title="Layanan Nasabah & Kartu Digital" icon="laptop">
+    Informasi saldo real-time, kartu digital dengan kode QR untuk loket teller, riwayat transaksi lengkap, unduh PDF rekening koran, dan manajemen profil.
+    [Buka panduan layanan](/clients/mobile/banking/)
+  </Card>
+  <Card title="Persetujuan Penarikan Tunai" icon="approve-check-circle">
+    Otorisasi penarikan loket Mode A, penerimaan notifikasi push FCM latar belakang, banner in-app, sinkronisasi countdown server, dan keypad PIN virtual aman.
+    [Buka panduan persetujuan](/clients/mobile/withdrawal-approval/)
+  </Card>
+</CardGrid>

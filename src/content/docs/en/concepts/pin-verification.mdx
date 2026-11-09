@@ -7,24 +7,34 @@ sources:
   - app/Services/PinService.php
   - app/Services/SettingsService.php
   - app/Http/Controllers/API/Customer/AuthController.php
+  - app/Http/Controllers/API/Customer/AccountController.php
   - config/bank.php
   - docs/PIN_VERIFICATION.md
+  - docs/CUSTOMER_AUTH.md
 ---
 
-import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
 import Mermaid from '../../../../components/Mermaid.astro';
 
-A customer PIN is 6 digits. It is used for customer login, to authorize withdrawals,
-and to change the PIN. Every PIN check runs in **one place**:
+A customer PIN is 6 digits. It is used to unlock the app session, authorize withdrawals,
+and change the PIN. **The PIN is not a login credential** (customers log in using Firebase
+Authentication). Every PIN check runs in **one place**:
 `App\Services\PinService::verify()`.
 
-## Storage
+## Storage and ownership
 
 - `customers.pin` is cast `hashed` (bcrypt, `BCRYPT_ROUNDS=12`) and is a hidden
   attribute (`$hidden`). No resource, error message or log contains the PIN.
-- The `withdrawal_authorizations` table **has no PIN column**.
-- The admin sets the initial PIN when opening the account. The admin can reset a PIN,
-  which also lifts a PIN lock. Customers can change their own PIN.
+- The `pin` column is **nullable**: every new account is created without a PIN (`pin_set: false`).
+- A database check constraint enforces `CHECK (pin IS NULL OR activated_at IS NOT NULL)`: a PIN
+  can only exist on an activated account.
+- **The admin never sets a PIN.** The customer creates their own PIN in the Bank Mini mobile app
+  after activation (`POST /api/customer/pin/setup`), supplying a fresh Firebase ID token to prove identity.
+- Before a customer creates a PIN, any action requiring a PIN is refused with status **422**
+  and error code `pin_not_set` without counting failed attempts.
+- **Two routes for forgotten PINs:**
+  1. **Direct Admin Reset:** An administrator resets the PIN directly in the admin portal (`POST /api/admin/customers/{id}/pin-reset`). This clears the PIN, removes locks, and cancels any open self-service request.
+  2. **Self-Service Request (v0.2.1):** The customer requests a reset in the mobile app (`POST /api/customer/pin-reset-requests`) using fresh Firebase re-authentication. Requires admin approval and a 24-hour safeguard delay (`BANK_PIN_RESET_WAIT_HOURS`) before the new PIN can be set. While open, withdrawals are paused (**422** `pin_reset_in_progress`).
 
 ## The shared PIN lock
 
@@ -50,8 +60,8 @@ and to change the PIN. Every PIN check runs in **one place**:
 | --- | --- |
 | Mistakes before the lock | 3 in a row (`BANK_PIN_MAX_ATTEMPTS`) |
 | Lock duration | 15 minutes (`BANK_PIN_LOCK_MINUTES`) |
-| Applies to | Customer login, withdrawal approval in the app, withdrawal with the PIN at the counter, PIN change |
-| Counter reset | A correct PIN, or the admin setting a new PIN |
+| Applies to | App unlock, withdrawal approval in the app, withdrawal with the PIN at the counter, PIN change |
+| Counter reset | A correct PIN, or the admin resetting the PIN |
 | Columns | `pin_failed_attempts`, `pin_locked_until` |
 
 `PinService::verify()` runs in **its own database transaction** with a row lock on
@@ -59,42 +69,35 @@ the customer, so a wrong attempt is saved even though the request fails. Callers
 bigger transaction (approval, counter withdrawal) call it **before** that transaction.
 
 <Aside type="caution" title="One lock everywhere">
-Three wrong PINs at login also lock withdrawal approval, and the other way round. The
-account number and the NIS lead to the same counter.
+Three wrong PINs at app unlock also lock withdrawal approval and counter withdrawals.
 </Aside>
 
-### Wrong-PIN responses
+### Responses when a PIN is wrong or not set
 
-<Tabs>
-<TabItem label="Login">
-Login does **not** reveal the remaining attempts:
+When a PIN has not yet been set (`pin_set: false`):
 
-```json
-{ "message": "NIS/nomor rekening atau PIN salah.", "errors": { "identifier": ["NIS/nomor rekening atau PIN salah."] } }
+```json title="422 Unprocessable Entity"
+{
+  "message": "Nasabah belum membuat PIN. PIN dibuat oleh nasabah di aplikasi Bank Mini setelah akun diaktifkan.",
+  "code": "pin_not_set"
+}
 ```
 
-From the third attempt until the lock ends (local time, WIB):
+When a wrong PIN is submitted:
 
-```json
-{ "message": "Terlalu banyak percobaan PIN salah. Coba lagi pukul 09:15.", "errors": { "identifier": ["Terlalu banyak percobaan PIN salah. Coba lagi pukul 09:15."] } }
-```
-</TabItem>
-<TabItem label="Approval, withdrawal, PIN change">
-```json
+```json title="422 Unprocessable Entity (attempt 1 or 2)"
 { "message": "PIN salah. Sisa percobaan: 2.", "remaining_attempts": 2, "pin_locked_until": null }
 ```
 
 When locked (`pin_locked_until` in UTC, the message in WIB):
 
-```json
+```json title="422 Unprocessable Entity (locked)"
 {
   "message": "PIN diblokir sementara karena terlalu banyak percobaan salah. Coba lagi pukul 20:25.",
   "remaining_attempts": 0,
   "pin_locked_until": "2026-10-27T13:25:37.830610Z"
 }
 ```
-</TabItem>
-</Tabs>
 
 ## Two withdrawal authorization modes
 

@@ -40,7 +40,7 @@ use Mode B.
 | | |
 | --- | --- |
 | Actor | Teller, with the customer typing the PIN |
-| Preconditions | As for deposits; mode `terminal`/`both`; PIN not locked; balance − amount ≥ minimum balance |
+| Preconditions | As for deposits; mode `terminal`/`both`; customer has set up a PIN (`422 pin_not_set` otherwise); PIN not locked; balance − amount ≥ minimum balance |
 | Endpoint | `POST /api/teller/withdrawals` |
 | Input | `account_number`, `amount`, `pin` (exactly 6 digits), optional `Idempotency-Key` header |
 

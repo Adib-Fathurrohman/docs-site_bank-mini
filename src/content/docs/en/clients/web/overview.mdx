@@ -1,0 +1,88 @@
+---
+title: Web App Overview & Setup
+description: Running the React staff web app, environment variables, token storage, authentication lifecycle, and route guards.
+sidebar:
+  order: 1
+sources:
+  - bank_mini/front-end/package.json
+  - bank_mini/front-end/src/App.tsx
+  - bank_mini/front-end/src/main.tsx
+  - bank_mini/front-end/src/api/client.ts
+  - bank_mini/front-end/src/auth/AuthProvider.tsx
+  - bank_mini/front-end/src/auth/guards.tsx
+  - bank_mini/front-end/src/layouts/AppShell.tsx
+  - bank_mini/front-end/src/layouts/StaffLayout.tsx
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+The staff web application is a Single Page Application (SPA) designed specifically for school bank operators: **Administrator**, **Supervisor**, and **Teller**.
+
+## Tech stack
+
+- **Framework & UI:** React 19, TypeScript, Tailwind CSS 4.
+- **Routing:** React Router 8 (nested layouts with role-based route guards).
+- **Server State Management:** TanStack Query 5 (declarative data fetching, caching, and cache invalidation).
+- **Camera & QR Scanner:** `@zxing/browser` for scanning student customer cards directly via webcams.
+- **Build & Tests:** Vite 8, Vitest.
+
+## Running the application
+
+<Steps>
+
+1. Navigate to the frontend directory and install dependencies:
+
+   ```bash
+   cd ../bank_mini/front-end
+   npm install
+   ```
+
+2. Configure backend API connection in `.env` or `.env.local`:
+
+   ```dotenv
+   # Backend API base URL (defaults to /api if proxying, or absolute URL)
+   VITE_API_BASE_URL=http://localhost:8000/api
+   ```
+
+3. Start the Vite dev server:
+
+   ```bash
+   npm run dev
+   ```
+
+   The app is available locally at `http://localhost:5173`.
+
+4. Build for production:
+
+   ```bash
+   npm run build
+   ```
+
+   Static assets are generated into `dist/`.
+
+</Steps>
+
+## Authentication & session architecture
+
+The app uses a unified HTTP client (`src/api/client.ts`) and auth context provider (`src/auth/AuthProvider.tsx`).
+
+### Token storage
+- Per shared school computer security recommendations, Sanctum bearer tokens are held in **`sessionStorage`** and in-memory state. Tokens are cleared when the browser tab closes.
+- On startup and page refreshes, `AuthProvider` validates stored tokens via `GET /api/staff/me`.
+- If valid, user profile data (`id`, `username`, `full_name`, `role`, `is_active`) populates global state.
+
+### `401` and `403` handling
+- The HTTP client intercepts session-ending `401 Unauthenticated` or `403 Forbidden` statuses (e.g. account disabled or invalid role).
+- It clears local session data and immediately redirects the user to `/login` with an informative error message.
+- Expected business 403 errors (such as `"Akun administrator tidak dapat diubah melalui API."`) are handled locally in forms without destroying sessions.
+
+## Route Guards & Navigation
+
+Route paths are guarded by wrapper components in `src/auth/guards.tsx`:
+
+| Guard | Requirement | Failure action |
+| --- | --- | --- |
+| `RequireRole` | Authenticated user matching the allowed role array | Redirects to `/login` (if unauthenticated) or their respective role dashboard |
+| `HomeRedirect` | Root path `/` | Redirects to `/teller` (teller), `/supervisor` (supervisor), or `/admin` (admin) |
+
+Related: [Authentication workflows](/en/workflows/authentication/) · [Authentication API Reference](/en/api/authentication/)

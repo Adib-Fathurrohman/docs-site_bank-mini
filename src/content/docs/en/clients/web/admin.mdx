@@ -1,0 +1,88 @@
+---
+title: Administrator Screens
+description: Guide to the administrator web interface — system settings, staff management & spreadsheet import, customer account opening, PIN resets, and student graduation.
+sidebar:
+  order: 4
+sources:
+  - bank_mini/src/features/admin/AdminDashboard.tsx
+  - bank_mini/src/features/admin/SettingsPage.tsx
+  - bank_mini/src/features/admin/CustomerFormPage.tsx
+  - bank_mini/src/features/admin/CustomerImportPage.tsx
+  - bank_mini/src/features/admin/CustomerCardPage.tsx
+  - bank_mini/src/features/admin/PinResetRequestsPage.tsx
+  - bank_mini/src/features/admin/StaffFormPage.tsx
+  - bank_mini/src/features/admin/StaffImportPage.tsx
+  - bank_mini/src/features/admin/GraduationPage.tsx
+  - bank_mini/src/features/directory/CustomersPage.tsx
+  - bank_mini/src/features/directory/CustomerDetailPage.tsx
+  - bank_mini/src/features/directory/StaffPage.tsx
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+The administrator interface (`/admin/*`, `/customers/*`, `/staff/*`) controls master reference data, institutional banking policies, and account lifecycles.
+
+## 1. System Settings (`/admin/settings`)
+
+Administrators configure three core operational rules at runtime:
+- **Minimum Balance (`min_balance`):** The non-withdrawable balance threshold (defaults to Rp10,000).
+- **QR Scanner Mode (`qr_scanner_mode`):** `webcam` (integrated device camera), `usb` (hardware barcode scanner emulation), or `disabled`.
+- **Withdrawal Verification Mode (`withdrawal_verification`):**
+  - `mobile`: Student confirms the withdrawal prompt on their personal mobile app (Mode A).
+  - `terminal`: Student inputs their PIN on the teller counter terminal (Mode B).
+  - `both`: Teller selects between Mode A and Mode B per transaction.
+
+## 2. Customer Account Management (`/customers`)
+
+### Opening a new account (`/customers/new`)
+The account opening form requires:
+- **NIS** (unique student identification number).
+- **Full Name**.
+- **Student Email:** Required and unique. The student uses this email when signing in with Firebase to activate the mobile app.
+- **Class & Major:** Grade level (X, XI, XII), major, and class group (1–4).
+- **No PIN Field:** The form **contains no PIN inputs**. Customers set their own PIN after activating the mobile app.
+
+### Importing customers from old bookkeeping (`/customers/import`)
+Migration workflow to bring existing savers into the system in bulk from spreadsheets:
+- **File Upload:** Accepts `.xlsx` and `.csv` files (up to 5 MB, max 1,000 customers). Columns are mapped automatically (NIS, Name, Email, Class, Major, Group, Balance, Account Number).
+- **Optional Transaction History:** Includes either a `Transaksi` sheet in the same workbook or a secondary transactions file (up to 10,000 rows). Unexplained balances are recorded as opening deposits.
+- **Row-Level Error Detection:** If any row fails validation, the system reports exact row numbers and errors, rolling back the entire batch atomically (*all-or-nothing*).
+- **Email Filter:** On the customers list (`/customers`), administrators can filter by `email=missing` to identify accounts needing emails so students can activate the mobile app.
+
+### Account Detail & Actions (`/customers/:id`)
+Displays live balance, major affiliation, statement previews, and management actions:
+- **Print Card (`/customers/:id/card`):** Formats student card details with printable QR codes.
+- **Suspend / Reactivate:** Toggles account banking status between `active` and `suspended`.
+- **Reset PIN:** When a student forgets their PIN, click **Reset PIN** (`POST /api/admin/customers/{id}/pin-reset`). This deletes the PIN and unlocks any lockouts; the customer sets up a new PIN in the mobile app. This action also automatically cancels any pending self-service reset request.
+- **Active Request Alert:** If the customer has an open self-service reset request, a warning banner alerts the admin that withdrawals are currently paused (`pin_reset_in_progress`).
+- **Close Account:** Transitions status to `inactive`, purges Sanctum tokens, disables the user in Firebase, and soft-deletes the record.
+
+### Graduation Batch Deactivation (`/admin/graduation`)
+Dedicated workflow for graduating grade XII students:
+- Filters active twelfth-grade accounts and displays unwithdrawn balances.
+- Ensures all student balances are refunded at the teller counter prior to executing graduation closures.
+
+## 3. Self-Service PIN Reset Requests (`/pin-reset-requests`)
+
+Dedicated interface for reviewing customer-initiated PIN reset requests submitted from the mobile app (`GET /api/pin-reset-requests`):
+
+- **Status Filters:** Supports filtering by request lifecycle status: `Pending`, `Approved`, `Rejected`, `Completed`, `Cancelled`, `Expired`, or `All`.
+- **Dashboard Alerts:** The admin dashboard displays warning banners and a pending task widget whenever reset requests await review.
+- **Decision Dialog (Approve / Reject):**
+  - **Approve (`POST /api/admin/pin-reset-requests/{id}/approve`):** The administrator approves the request after verifying the student's physical identity (e.g. inspecting their student ID card in person). Approval activates a 24-hour cooldown timer before the customer can enter a new PIN on their mobile device.
+  - **Reject (`POST /api/admin/pin-reset-requests/{id}/reject`):** The administrator can specify an optional decision note (`decision_note`) explaining why the request was turned down.
+- **Withdrawal Freeze:** While a request is `pending` or `approved`, all withdrawal operations for the customer are paused with `422 pin_reset_in_progress` to protect funds against unauthorized takeovers. Deposits continue to function normally.
+- **Direct Reset Fallback:** If a student visits the counter in person, administrators can always perform an instant **Reset PIN** from the customer detail page (`POST /api/admin/customers/{id}/pin-reset`), which wipes the old PIN immediately and cancels any active self-service request.
+
+## 4. Staff Directory & Spreadsheet Import (`/staff`)
+
+### Staff Creation & Editing (`/staff/new`)
+Create new accounts for `teller` or `supervisor` roles. Fields include username, full name, password (minimum 8 characters), grade, and WhatsApp contact number.
+
+### Spreadsheet Import (`/staff/import`)
+Bulk register staff members using `.xlsx` or `.csv` files:
+- Downloadable starter template.
+- Supports Indonesian and English column headers (`Username`, `Nama`, `Kelas`, `No WA`, `Password`, `Peran`).
+- All-or-nothing execution: If any row fails validation, the error details pinpoint the spreadsheet row number and roll back the entire batch.
+
+Related: [Account and staff management workflow](/en/workflows/account-management/) · [Administrator role](/en/roles/admin/) · [Admin API reference](/en/api/admin/)

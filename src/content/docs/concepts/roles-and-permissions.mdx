@@ -39,7 +39,7 @@ tabel `users` dan tidak punya `role`.
 | Administrator | `App\Models\User` | `admin` | Dibuat oleh seeder; tidak dapat dibuat, diubah, diblokir, atau dihapus lewat API |
 | Supervisor | `User` | `supervisor` | |
 | Teller | `User` | `teller` | Biasanya siswa yang bertugas (kolom `class`, `phone`) |
-| Nasabah | `App\Models\Customer` | — | Siswa; masuk dengan NIS/nomor rekening + PIN |
+| Nasabah | `App\Models\Customer` | — | Siswa; login menggunakan Firebase (Google atau email/password), aktivasi rekening via NIS |
 
 Setiap staf punya tepat satu peran. Pengguna dengan banyak peran tidak didukung.
 
@@ -67,7 +67,9 @@ Setiap staf punya tepat satu peran. Pengguna dengan banyak peran tidak didukung.
 | `staff` | `EnsureStaffRole` | Token harus milik `User` dengan `is_active = true`. Jika tidak: `403 "Fitur ini khusus untuk staf bank."` atau `"Akun staf ini sudah dinonaktifkan."` |
 | `staff:admin,supervisor` (dst.) | `EnsureStaffRole` | Seperti di atas, ditambah `role` harus ada di daftar. Jika tidak: `403 "Peran Anda tidak memiliki akses ke fitur ini."` |
 | `customer` | `EnsureCustomer` | Token harus milik `Customer` yang statusnya bukan `inactive`. Jika tidak: `403 "Fitur ini khusus untuk nasabah."` atau `"Rekening ini sudah tidak aktif."` |
-| `throttle:login` | Rate limiter | 5 percobaan per menit per username/identifier + IP |
+| `throttle:login` | Rate limiter | 5 percobaan per menit per username + IP (staf) atau 30 per menit per IP (id_token nasabah) |
+| `throttle:customer-activation` | Rate limiter | 20 per menit per IP |
+| `throttle:customer-unlock` | Rate limiter | 5 per menit per nasabah (unlock & buat PIN) |
 | `throttle:10,1` | Rate limiter | 10 koreksi per menit per teller |
 | `throttle:withdrawal-authorization-*` | Rate limiter bernama | Batas permintaan otorisasi penarikan per aktor (lihat [API otorisasi penarikan](/api/withdrawal-authorizations/)) |
 
@@ -97,12 +99,17 @@ backend yang dicantumkan.
 | Kemampuan | Admin | Supervisor | Teller | Nasabah |
 | --- | :-: | :-: | :-: | :-: |
 | Login, logout, membaca profil sendiri | ✓ | ✓ | ✓ | ✓ |
+| Logout dari semua perangkat | — | — | — | ✓ |
+| Aktivasi rekening pertama kali via NIS + Firebase | — | — | — | ✓ |
+| Buka kunci aplikasi (unlock) dengan PIN | — | — | — | ✓ |
+| Membuat PIN awal (setelah aktivasi / reset) | — | — | — | ✓ |
+| Reset PIN nasabah (lupa PIN) | ✓ | — | — | — |
 | Membaca jurusan dan pengaturan | ✓ | ✓ | ✓ | — |
 | Mengubah pengaturan | ✓ | — | — | — |
 | Melihat daftar dan detail staf | ✓ | ✓ | — | — |
 | Membuat, mengubah, memblokir, menghapus, mengimpor teller/supervisor | ✓ | — | — | — |
-| Melihat daftar dan detail rekening (termasuk yang ditutup) | ✓ | ✓ | — | — |
-| Membuka, mengubah, reset PIN, menangguhkan, menutup rekening | ✓ | — | — | — |
+| Melihat daftar dan detail rekening (termasuk filter aktivasi dan yang ditutup) | ✓ | ✓ | — | — |
+| Membuka, mengubah, menangguhkan, menutup rekening | ✓ | — | — | — |
 | Data kartu nasabah (payload QR) untuk dicetak | ✓ | — | — | — |
 | PDF mutasi nasabah mana pun | ✓ | ✓ | — | — |
 | Mencari satu nasabah lewat QR / nomor rekening / NIS | — | — | ✓ | — |

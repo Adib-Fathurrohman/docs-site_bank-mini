@@ -1,0 +1,72 @@
+---
+title: Banking Services & Digital Card
+description: Mobile dashboard, real-time balance inquiries, digital QR card, statement history, statement PDF downloads, and profile security settings.
+sidebar:
+  order: 3
+sources:
+  - bank-mini-mobile/src/app/(app)/(tabs)/index.tsx
+  - bank-mini-mobile/src/app/(app)/(tabs)/card.tsx
+  - bank-mini-mobile/src/app/(app)/(tabs)/history.tsx
+  - bank-mini-mobile/src/app/(app)/(tabs)/profile.tsx
+  - bank-mini-mobile/src/app/(app)/transaction/[id].tsx
+  - bank-mini-mobile/src/app/(app)/statement.tsx
+  - bank-mini-mobile/src/app/(app)/change-pin.tsx
+  - bank-mini-mobile/src/app/(app)/change-password.tsx
+  - bank-mini-mobile/src/components/PinResetBanner.tsx
+---
+
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+Once the customer session is unlocked and in the `ready` stage, the application presents four primary navigation tabs to manage daily student banking activities.
+
+## 1. Home Tab (`/`)
+
+The main dashboard provides real-time banking summaries:
+
+- **Balance Card:** Displays the current available balance (`balance`) formatted in Indonesian Rupiah with the timestamp of the last server synchronization.
+- **Account Status Banner:** If the account status is `suspended`, a prominent notice warns the student that teller counter transactions are temporarily disabled until reactivated by an administrator.
+- **Withdrawal Prompt Banner:** Whenever a withdrawal authorization is pending customer approval, an interactive green banner appears at the top for one-tap navigation to the decision screen.
+- **PIN Reset Banner (`PinResetBanner`):** When a self-service PIN reset request is active (`pending` or `approved`), an orange banner displays the status or the remaining 24-hour wait time with a direct shortcut to `/pin-reset`. Withdrawals are paused while the request is open.
+- **Recent Activity:** Lists the latest five statement lines with visual transaction indicators (green for incoming deposits, orange/gray for outgoing withdrawals).
+
+---
+
+## 2. Digital Card & QR Code (`/card`)
+
+Serves as the paperless savings passbook when transacting at school teller counters:
+
+- **Card Layout:** Student banking identity card rendering the school banner, student full name, account number, NIS, grade, rombel group, and major department.
+- **QR Code:** Generated client-side using `react-native-qrcode-svg` with the standard system payload format:
+  ```text
+  BANKMINI:{account_number}
+  Example: BANKMINI:RPL-2026-001
+  ```
+- **Teller Interaction:** Tellers scan this QR code via integrated webcam or USB barcode reader in the staff web app to look up the student record instantly without manual typing.
+
+---
+
+## 3. Transaction History & Statement (`/history`, `/statement`)
+
+### Statement History (`/history`)
+- Displays the complete audit log of transactions associated with the account via infinite scrolling.
+- Each row reflects transaction type (Deposit / Withdrawal / Opening Balance), monetary amount, balance after transaction, and server timestamp.
+- Tapping any row opens the single transaction detail view (`/transaction/:id`).
+
+### PDF Statement Export (`/statement`)
+- Students can download official account statement PDFs (digital passbook) directly to Android device storage (`/api/customer/statement/export`).
+- The PDF is compiled server-side by DomPDF, featuring official school letterhead, total debit/credit summaries, and tabular ledger entries.
+
+---
+
+## 4. Profile & Account Settings (`/profile`)
+
+The profile screen manages security credentials, push preferences, and device sessions:
+
+| Feature | Description & Workflow |
+| --- | --- |
+| **Notification Switch** | Enables or disables FCM push alerts. When toggled off, the app issues `DELETE /api/customer/push-tokens`. When toggled on, the current device FCM token is registered via `POST /api/customer/push-tokens`. |
+| **Change PIN (`/change-pin`)** | Updates the 6-digit transaction PIN (`POST /api/customer/pin`). Requires the current PIN, followed by the new PIN and confirmation. |
+| **Change Password** | Updates the student's Firebase account password via `/change-password`. Active only for email/password authenticated accounts (hidden when logged in via Google). |
+| **Lock App** | Manually transitions the active session to `locked`, immediately presenting the PIN unlock screen (`/unlock`). |
+| **Sign Out** | Revokes the current Sanctum access token (`POST /api/customer/logout`), deletes the device FCM token on the server, and purges KeyStore credentials. |
+| **Sign Out Everywhere** | Option to revoke all Sanctum sessions (`logoutAll`) and purge all push registration tokens registered under this student across all devices. |

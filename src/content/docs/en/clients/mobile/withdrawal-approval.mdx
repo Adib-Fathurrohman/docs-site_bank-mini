@@ -1,0 +1,112 @@
+---
+title: Withdrawal Approvals
+description: Counter withdrawal authorization workflow on the customer Android app (Mode A), FCM push alerts, server countdown synchronizer, and secure PIN pad.
+sidebar:
+  order: 4
+sources:
+  - bank-mini-mobile/src/app/(app)/approval/[id].tsx
+  - bank-mini-mobile/src/app/(app)/(tabs)/approvals.tsx
+  - bank-mini-mobile/src/components/PinPad.tsx
+  - bank-mini-mobile/src/components/ApprovalBanner.tsx
+  - bank-mini-mobile/src/push/PushManager.tsx
+  - bank-mini-mobile/src/push/messaging.native.ts
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+import Mermaid from '../../../../../components/Mermaid.astro';
+
+Mode A is the primary withdrawal verification method in Bank Mini. Tellers **never** view or type the student's PIN; withdrawal authorization is executed entirely by the student on their own Android device.
+
+## Authorization Flow (Mode A)
+
+<Mermaid
+  caption="Withdrawal authorization sequence between staff web, backend API, and customer Android app."
+  chart={`sequenceDiagram
+  autonumber
+  participant T as Teller (Staff Web)
+  participant API as Backend API
+  participant M as Customer (Android APK)
+
+  T->>API: POST /teller/withdrawal-authorizations {account_number, amount}
+  API-->>T: 201 Created {id, status: pending, expires_at, server_time}
+  API--)M: FCM Push Alert (Background / In-App Banner)
+  M->>M: Tap notification / Open Approvals tab
+  M->>API: GET /customer/withdrawal-authorizations/{id}
+  API-->>M: 200 {amount, teller, balance, balance_after}
+  M->>M: Student reviews details & types 6-digit PIN
+  M->>API: POST /customer/withdrawal-authorizations/{id}/approve {pin}
+  Note over API: PinService::verify<br/>Status transitions to: approved
+  API-->>M: 200 OK {status: approved}
+  T->>API: POST /teller/withdrawal-authorizations/{id}/complete
+  Note over API: DB Transaction:<br/>lock · deduct balance · print receipt
+  API-->>T: 201 Transaction
+  API-->>M: Polling detects status "consumed" (Completed)`}
+/>
+
+---
+
+## 1. FCM Push Notifications & In-App Banner
+
+When a teller initiates a withdrawal request at the counter:
+
+- **Android Push Notification:** The Laravel backend asynchronously (`defer`) dispatches an FCM payload to the student's registered Android device tokens:
+  - Title: `Permintaan penarikan`
+  - Body: `Teller <Teller Name> meminta persetujuan penarikan Rp <Amount>. Buka aplikasi untuk menyetujui atau menolak.`
+  - Data payload: `{ "type": "withdrawal_authorization", "id": "<ULID>" }`
+- **Background Handler (`index.js`):** Intercepts pushes when the Android application is minimized or closed (*cold start*). Tapping the notification launches the app and stores `pendingRequestId`.
+- **In-App Banner (`PushManager.tsx`):** If the app is active in the foreground, an interactive green notification banner appears for 8 seconds at the top of the display.
+- **Fallback Polling:** The **Approvals** tab (`/approvals`) polls `GET /api/customer/withdrawal-authorizations` every 4 seconds, guaranteeing requests are received even if push notifications are disabled or restricted by firewall rules.
+
+---
+
+## 2. Decision Screen (`/approval/:id`)
+
+Selecting an authorization request opens the decision interface:
+
+### Server Clock Synchronization (`useCountdown`)
+- Withdrawal requests expire **120 seconds** from creation.
+- The countdown timer synchronizes against the backend's server timestamp (`server_time`), eliminating discrepancies caused by skewed or incorrect phone clocks.
+
+### Transaction Breakdown
+Provides clear financial details before approval:
+- **Teller Identity:** Name of the counter teller requesting authorization.
+- **Withdrawal Amount:** Cash sum requested in Indonesian Rupiah.
+- **Account Balances:** Current balance and projected post-transaction balance.
+
+---
+
+## 3. Secure PIN Pad (`PinPad.tsx`) & Execution
+
+Approval submissions are secured by a custom on-screen keypad:
+
+<Steps>
+
+1. **PIN Entry:** The student enters their 6-digit PIN using the on-screen virtual keypad, bypassing the Android system soft-keyboard to defend against keylogging malware.
+2. **Dispatch Approval:**
+   ```http
+   POST /api/customer/withdrawal-authorizations/{id}/approve
+   Content-Type: application/json
+   Authorization: Bearer <sanctum-token>
+
+   {
+     "pin": "135790"
+   }
+   ```
+3. **Immediate Memory Clearance:** The PIN state is instantly cleared following any submission attempt and is never stored in persistent memory.
+4. **Rejection Option:** If the student is not at the teller counter or notes an inaccurate amount, they can tap **Tolak penarikan** (`POST /api/customer/withdrawal-authorizations/{id}/reject`) to cancel the authorization immediately without deducting funds.
+
+</Steps>
+
+---
+
+## 4. Terminal Request Statuses
+
+The app continuously reflects the status lifecycle of the request:
+
+| Status | Customer App View |
+| --- | --- |
+| `approved` | *"Menunggu teller menyerahkan uang..."* — 120-second countdown for teller completion. |
+| `consumed` | *"Penarikan selesai"* — Teller completed transaction and handed over cash. Funds deducted. |
+| `rejected` | *"Permintaan ditolak"* — Student rejected request. No money deducted. |
+| `cancelled` | *"Permintaan dibatalkan teller"* — Teller cancelled the counter transaction. |
+| `expired` | *"Waktu persetujuan habis"* — Request timed out past the 120-second window. |

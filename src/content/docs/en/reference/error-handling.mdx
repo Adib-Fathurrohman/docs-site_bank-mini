@@ -26,6 +26,9 @@ always get one error shape.
 | `AccountNotActiveException` | The account cannot transact (e.g. suspended) | — |
 | `InsufficientBalanceException` | A withdrawal breaks the minimum balance, or a deposit correction would make the balance negative | — |
 | `InvalidPinException` | The PIN is wrong or currently locked | `remaining_attempts`, `pin_locked_until` |
+| `PinNotSetException` | The customer has not set up an initial PIN in the app | `code: "pin_not_set"` |
+| `CustomerAppNotActivatedException` | The customer has not activated the mobile app when teller initiates authorization | `code: "customer_app_not_activated"` |
+| `CustomerAuthException` | Firebase customer auth/activation is refused (invalid token, provider not allowed, not linked, mismatch) | `code` (HTTP status 401, 403, 409, or 503) |
 | `CashMismatchException` | The physical cash at closing differs from the system balance | `system_balance`, `physical_balance`, `difference` |
 | `CorrectionNotAllowedException` | A correction is refused (wrong shift, already corrected, …) | — |
 | `IdempotencyConflictException` | An `Idempotency-Key` is reused for a different transaction | — |

@@ -25,8 +25,8 @@ Current behavior that has not been fixed. Numbering follows
 | L4 | CORS exposes no response headers (`Idempotent-Replayed`, `Content-Disposition`) | Detect replays by `201`/`200`; name PDFs in the client; or use a same-origin proxy |
 | L5 | Closing an account needs no zero balance and cannot be undone | Warn before closing an account with money in it |
 | L6 | Staff cannot change their own password; admin accounts cannot be edited through the API | No "change password" page for staff |
-| L7 | No token refresh (8 hours, absolute) | Log in again on `401` |
-| L8 | No forgot password/PIN | Show "contact the administrator" |
+| L7 | No token refresh (8 hours for staff, 30 days for customers) | Log in again on `401` |
+| L8 | Forgotten PINs must be reset by an admin via `POST /admin/customers/{id}/pin-reset`; forgotten staff passwords must be changed by admin | Customers cannot self-service reset PINs |
 | L9 | Mixed languages: Indonesian business messages, English validation messages | Map field messages if one language is needed |
 | L10 | The annual report, journal and audit exports are PDF-only | Build tables from the `/audit/*` JSON |
 | L11 | Filter values on `/customers` and `/staff` are not validated | Use dropdowns with fixed values |
@@ -37,7 +37,7 @@ Current behavior that has not been fixed. Numbering follows
 | L16 | Idempotency keys never expire | Generate a new key per transaction |
 | L17 | The QR payload is not signed; it only identifies | Withdrawals always need the PIN |
 | L18 | No list has sort parameters | Accept the server order |
-| L19 | Withdrawal requests are delivered by polling only | Poll while visible |
+| L19 | FCM push notifications are scoped to new withdrawal authorizations; other events rely on polling or manual refresh | Register device token via `/api/customer/push-tokens` and handle fallback polling |
 | L20 | Customer tokens have no abilities | Optional: biometrics before the PIN pad |
 | L21 | An account closed between approval and completion makes `complete` answer `404` | Show the message; start over |
 
@@ -50,6 +50,8 @@ From `docs/FRONTEND_HANDOFF.md` §19.
 | I1 | The UKK matrix gives the admin no "input transaksi" access and read access to the journal. The backend also lets admins read the transaction log | Implemented as described |
 | I2 | `POST /staff/login` and `/customer/login` duplicate `POST /login` | Use `/login` only |
 | I3 | The login message `Rekening ini sudah tidak aktif.` can practically never appear (`inactive` accounts are always soft-deleted) | Treat both as a login failure |
+| I4 | PRD FR-Auth-02 specified customer login via NIS + PIN | Backend switched to Firebase Authentication (`id_token`); NIS + PIN login is removed |
+| I5 | App unlock (`POST /customer/unlock`) is a client-side gate | Stored Sanctum tokens remain valid for API calls even before the client is unlocked |
 | I6 | The UKK interview asked about Customer Service/Accounting roles and student vs employee savings products; the backend implements the exam's four roles and one savings product (account 201) | Not available |
 
 ## Not available
@@ -62,9 +64,9 @@ These features do **not** exist in the backend. Do not build UI for them.
 - Partial corrections; editing or deleting transactions.
 - Bulk report approval; delegated approval.
 - Moving cash from the vault to tellers.
-- Forgot password/PIN; staff changing their own password; managing admin accounts.
+- Self-service staff password reset; staff changing their own password; managing admin accounts.
 - Major management; multi-role users; attendance integration.
-- Notifications (push, email, WhatsApp).
+- Push notifications for general transactions beyond withdrawal authorizations (e.g. deposit alerts, balance updates).
 - Approval in the app for deposits or corrections (withdrawals only).
 - A JSON annual report; server-generated QR images.
 - A withdrawal authorization list for admins or supervisors.

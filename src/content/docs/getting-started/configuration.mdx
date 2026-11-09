@@ -33,7 +33,12 @@ Didefinisikan di `config/bank.php` dan tercantum di `.env.example`.
 | `BANK_PIN_LOCK_MINUTES` | `15` | Lama blokir PIN (menit) |
 | `BANK_WITHDRAWAL_AUTH_PENDING_SECONDS` | `120` | Batas waktu nasabah menyetujui permintaan penarikan |
 | `BANK_WITHDRAWAL_AUTH_APPROVED_SECONDS` | `120` | Batas waktu teller menyelesaikan penarikan setelah disetujui |
-| `SANCTUM_EXPIRATION` | `480` | Masa berlaku token API (menit). Absolut, tidak diperpanjang oleh aktivitas |
+| `SANCTUM_EXPIRATION` | `480` | Masa berlaku token API staf (menit / 8 jam). Absolut |
+| `CUSTOMER_SESSION_MINUTES` | `43200` | Masa berlaku token sesi nasabah (menit / 30 hari). Absolut |
+| `FIREBASE_PROJECT_ID` | — | ID proyek Firebase untuk autentikasi nasabah |
+| `FIREBASE_CREDENTIALS` | — | Path ke berkas kunci service account JSON Firebase |
+| `FIREBASE_ALLOWED_PROVIDERS` | `password,google.com` | Provider Firebase yang diizinkan untuk login nasabah |
+| `FIREBASE_AUTH_EMULATOR_HOST` | — | Alamat emulator Firebase Auth lokal (misal `127.0.0.1:9099`, opsional) |
 
 Pecahan uang yang dihitung teller juga ada di `config/bank.php`, tetapi tidak dapat
 diatur lewat `.env`: `100000`, `50000`, `20000`, `10000`, `5000`, `2000`, `1000`,

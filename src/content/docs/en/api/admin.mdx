@@ -9,7 +9,15 @@ sources:
   - app/Http/Controllers/API/SettingsController.php
   - app/Http/Requests
   - app/Http/Resources
+  - app/Http/Controllers/API/Admin/PinResetRequestController.php
+  - app/Http/Requests/Admin/DecidePinResetRequest.php
+  - app/Http/Resources/PinResetRequestResource.php
+  - app/Models/PinResetRequest.php
+  - app/Services/CustomerImportService.php
+  - app/Models/CustomerImport.php
+  - app/Services/PinService.php
   - docs/API.md
+  - docs/CUSTOMER_AUTH.md
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -172,27 +180,33 @@ accounts are hidden from the list by default but can always be opened by id.
 | --- | --- |
 | `search` | Name, NIS or account number |
 | `major_id`, `class`, `group`, `status` | Filters (not validated, see L11) |
+| `activation` | `pending` (not activated) or `activated` |
+| `email` | `missing` (imported accounts without an email) or `present` |
 | `trashed` | `with` includes closed accounts, `only` shows only them |
 
 <Endpoint method="POST" path="/api/admin/customers" roles="admin" />
 
-Open an account. The account number is generated; the account starts `active` with a
-balance of `0`. `account_number`, `account_status` and `balance` in the body are
-ignored.
+Open an account. The account number is generated automatically; the account starts `active` with a
+balance of `0`, activation status `pending`, and no PIN set. `account_number`, `account_status`, `balance`, and `pin` in the body are ignored/refused.
+Customers create their own PIN in the Bank Mini app after activation.
 
 | Field | Rules |
 | --- | --- |
 | `nis` | Required, max 20, unique (including closed accounts) |
 | `full_name` | Required, max 255 |
+| `email` | Required, valid email, max 255, unique (stored lowercase). Used by student to activate the app |
 | `class` | Required, `X`/`XI`/`XII` |
 | `major_id` | Required, an existing major |
 | `group` | Required, `1`–`4` |
-| `pin` | Required, exactly 6 digits (stored hashed) |
+
+Sending a `pin` field is rejected (**422** `errors.pin: "PIN dibuat oleh nasabah di aplikasi Bank Mini setelah aktivasi."`).
 
 ```json title="201 — example from the demo database"
 {
   "data": {
     "id": 4, "account_number": "AK-2026-001", "nis": "20260004", "full_name": "Dewi Anggraini",
+    "email": "dewi.anggraini@example.test",
+    "activation_status": "pending", "activated_at": null, "pin_set": false,
     "class": "X", "group": "2",
     "major": { "id": 4, "code": "AK", "major_name": "Akuntansi dan Keuangan Lembaga" },
     "account_status": "active", "balance": 0,
@@ -201,15 +215,144 @@ ignored.
 }
 ```
 
+<Endpoint method="POST" path="/api/admin/customers/import" roles="admin" />
+
+Bulk-creates customer accounts from old bookkeeping records, optionally with initial balances and transaction histories. Uses `multipart/form-data`:
+
+| Field | Type | Rules |
+| --- | --- | --- |
+| `file` | file | Required, `.xlsx`/`.csv`/`.txt`, max 5 MB, max 1,000 customers. Columns: `nis`, `nama`/`full_name`, `email` (optional), `kelas`/`class`, `jurusan`/`major`, `rombel`/`group`, `saldo`/`balance` (optional), `no_rekening` (optional) |
+| `transactions_file` | file | Optional, `.xlsx`/`.csv`/`.txt`, max 5 MB, max 10,000 rows (or a sheet named `Transaksi` in `file`). Columns: `nis`, `tanggal`, `jenis` (`setor`/`tarik`), `nominal`, `keterangan` |
+
+- **All or nothing:** If any row fails validation (invalid NIS/class format, negative balance, or transactions causing the balance to drop below zero), the entire import is rolled back, returning **422** with grouped spreadsheet row errors.
+- **Opening balance:** Any part of the customer balance not explained by the transaction history is automatically recorded as an opening deposit with the note *"Saldo awal dari pembukuan lama"*.
+- **Without email:** Accounts imported without an email remain in `pending` activation status. They can make teller deposits immediately, but cannot activate the mobile app until an email is added via `PATCH /api/admin/customers/{id}`.
+- **Imported transactions:** Transactions belong to a `customer_imports` batch (`daily_report_id: null`), so they do not alter teller drawer cash counts and cannot be corrected.
+
+```json title="201 — successful import response"
+{
+  "message": "Data nasabah berhasil diimpor.",
+  "data": {
+    "import_id": 1,
+    "customers_created": 25,
+    "transactions_created": 150,
+    "customers_without_email": 3,
+    "customers": [
+      { "id": 10, "account_number": "RPL-2026-010", "nis": "20260010", "full_name": "Ahmad Dani", ... }
+    ]
+  }
+}
+```
+
 <Endpoint method="PUT|PATCH" path="/api/admin/customers/{customer}" roles="admin" />
 
-Any subset of `nis`, `full_name`, `class`, `major_id`, `group`, `account_status`
-(`active` or `suspended` only) and `pin` (6 digits; a PIN reset also lifts a PIN lock).
+Update customer details: `nis`, `full_name`, `class`, `major_id`, `group`, `account_status` (`active` or `suspended`).
+The `email` field can only be updated while activation status is `pending` (e.g. correcting a typo).
+Once activated, the email is locked (**422** `errors.email: "Email tidak dapat diubah setelah rekening diaktifkan."`).
+The `pin` field is always rejected (**422** `errors.pin: "PIN dibuat oleh nasabah di aplikasi Bank Mini. Gunakan reset PIN jika nasabah lupa PIN."`).
 The account number and balance cannot be changed. A closed account answers `404`.
+
+<Endpoint method="POST" path="/api/admin/customers/{customer}/pin-reset" roles="admin" />
+
+Resets a forgotten PIN directly by an administrator:
+
+- Clears the customer's PIN (`pin_set` becomes `false`).
+- Lifts any lock from failed attempts (`pin_failed_attempts = 0`, `pin_locked_until = null`).
+- Cancels any open self-service forgotten-PIN request on the account.
+- The customer creates a new PIN in the app after re-authenticating with Firebase (`POST /api/customer/pin/setup`).
+
+**200 OK:**
+```json
+{
+  "message": "PIN direset. Nasabah membuat PIN baru di aplikasi Bank Mini.",
+  "data": { "id": 4, "account_number": "AK-2026-001", "pin_set": false, "...": "..." }
+}
+```
+
+## Customer forgotten-PIN requests
+
+Endpoints for reviewing and resolving self-service forgotten-PIN requests created by students from the mobile app. While an open request exists, withdrawals on the account are paused to protect account balances.
+
+<Endpoint method="GET" path="/api/pin-reset-requests" roles="admin,supervisor" />
+
+<Endpoint method="GET" path="/api/pin-reset-requests/{pinResetRequest}" roles="admin,supervisor" />
+
+Lists student PIN reset requests (newest first, default 15 items per page):
+
+| Query Parameter | Type | Description |
+| --- | --- | --- |
+| `status` | string | Status filter: `pending`, `approved`, `rejected`, `cancelled`, `expired`, `completed` |
+| `customer_id` | integer | Filter by customer ID |
+| `page`, `per_page` | integer | Pagination parameters |
+
+`PinResetRequest` response object:
+```json title="200 — example PIN reset request response"
+{
+  "data": {
+    "id": "01JM6T...",
+    "status": "pending",
+    "status_label": "Menunggu persetujuan",
+    "requested_at": "2026-11-09T08:00:00Z",
+    "available_at": "2026-11-10T08:00:00Z",
+    "ready": false,
+    "expires_at": "2026-11-16T08:00:00Z",
+    "approved_at": null,
+    "rejected_at": null,
+    "cancelled_at": null,
+    "completed_at": null,
+    "decision_note": null,
+    "customer": {
+      "id": 1,
+      "account_number": "RPL-2026-001",
+      "nis": "20260001",
+      "full_name": "Budi Santoso",
+      "class": "X",
+      "group": "1",
+      "major_name": "Rekayasa Perangkat Lunak",
+      "account_status": "active",
+      "balance": 500000,
+      "pin_locked_until": null,
+      "activation_status": "activated",
+      "pin_set": true
+    },
+    "decided_by": null
+  }
+}
+```
+
+<Endpoint method="POST" path="/api/admin/pin-reset-requests/{pinResetRequest}/approve" roles="admin" />
+
+Approves a student's forgotten-PIN request (`pending` → `approved`). Administrators should confirm the student's identity in person:
+
+| Field | Type | Rules | Description |
+| --- | --- | --- | --- |
+| `note` | string | Optional, max 255 | Note documenting identity verification |
+
+```json
+{
+  "note": "Student verified in person with student card."
+}
+```
+
+- **FCM Push Notification:** The backend dispatches a push notification to the student's devices notifying them of the approval.
+- **24-Hour Wait Window:** Admin approval **does not shorten** the waiting period. The student can only set their new PIN after `available_at` has passed (24 hours after the request was opened).
+- Returns **200 OK** with the `PinResetRequest` object in `approved` status.
+
+<Endpoint method="POST" path="/api/admin/pin-reset-requests/{pinResetRequest}/reject" roles="admin" />
+
+Rejects a forgotten-PIN request (`pending` → `rejected`):
+
+| Field | Type | Rules | Description |
+| --- | --- | --- | --- |
+| `note` | string | Optional, max 255 | Rejection reason |
+
+- Dispatches an FCM push alert to the student's devices. Rejecting unpauses withdrawals on the account. The student may submit a new request if appropriate.
+- Returns **200 OK** with status `rejected`.
+- Returns **409** (`pin_reset_not_usable`) if the request status is not `pending`.
 
 <Endpoint method="POST" path="/api/admin/customers/{customer}/deactivate" roles="admin" />
 
-Graduation: status `inactive`, tokens revoked, soft deleted. History stays. **200**
+Graduation/closing: status `inactive`, all Sanctum tokens revoked, the Firebase user disabled in Firebase Authentication, and the record soft deleted. Transaction history is preserved. **200**
 Customer with `deleted_at`. No balance check (see L5).
 
 <Endpoint method="GET" path="/api/admin/customers/{customer}/card" roles="admin" />
@@ -241,11 +384,15 @@ generate the image.
 
 | Field | Notes |
 | --- | --- |
-| `id`, `nis`, `full_name`, `class`, `group` | |
-| `account_number` | e.g. `RPL-2026-001`, generated |
+| `id`, `nis`, `full_name`, `class`, `group` | Customer identity |
+| `account_number` | e.g. `RPL-2026-001`, generated automatically |
+| `email` | Registered email used for mobile app activation |
+| `activation_status` | `"pending"` (not activated) or `"activated"` |
+| `activated_at` | Timestamp of successful activation (nullable) |
+| `pin_set` | Boolean: `true` if PIN created, `false` otherwise |
 | `major` | `{ id, code, major_name }` |
 | `account_status` | `active`, `suspended`, `inactive` |
-| `balance` | Rupiah |
+| `balance` | Balance in Rupiah |
 | `created_at`, `updated_at`, `deleted_at` | `deleted_at` is set when the account is closed |
 
-Never returned: `pin` (hash), `pin_failed_attempts`.
+Never returned: `firebase_uid`, `pin` (hash), `pin_failed_attempts`.

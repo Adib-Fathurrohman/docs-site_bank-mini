@@ -37,14 +37,12 @@ Tidak ada transfer antar-rekening, pinjaman, atau transaksi yang dimulai nasabah
 
 | Komponen | Teknologi | Pengguna | Status |
 | --- | --- | --- | --- |
-| Backend REST API | Laravel 13, PHP 8.3+, MariaDB, Sanctum | Semua klien | <Badge text="Selesai" variant="success" /> |
-| Aplikasi web staf | React | Admin, Supervisor, Teller | <Badge text="Dalam pengembangan" variant="caution" /> |
+| Backend REST API | Laravel 13, PHP 8.3+, MariaDB, Sanctum, Firebase Auth | Semua klien | <Badge text="Selesai" variant="success" /> |
+| Aplikasi web staf | React 19, TypeScript, Vite, Tailwind CSS 4 | Admin, Supervisor, Teller | <Badge text="Selesai" variant="success" /> |
 | Aplikasi mobile nasabah | React Native + Expo | Nasabah (siswa) | <Badge text="Belum dimulai" variant="note" /> |
 
-Backend sudah menyediakan semua endpoint yang dibutuhkan kedua klien dan telah diuji
-otomatis (540 test lulus di SQLite dan MariaDB menurut `docs/BACKEND_CHECKPOINT.md`).
-Dokumentasi klien ditunda sampai aplikasinya selesai; lihat
-[Aplikasi klien](/clients/).
+Backend menyediakan 72 route endpoint yang telah diuji otomatis melalui seluruh test suite.
+Dokumentasi aplikasi web staf dapat dilihat di [Aplikasi klien](/clients/).
 
 ## Empat aktor
 
@@ -53,7 +51,7 @@ Dokumentasi klien ditunda sampai aplikasinya selesai; lihat
 | Administrator | Username + password | Mengelola staf, rekening nasabah, dan pengaturan; membaca jurnal dan laporan |
 | Supervisor | Username + password | Memeriksa laporan harian teller, mengotorisasi koreksi, memantau brankas dan jurnal |
 | Teller | Username + password | Menjalankan shift, mencatat setoran dan penarikan, mengoreksi kesalahan |
-| Nasabah | NIS atau nomor rekening + PIN 6 digit | Melihat rekening sendiri; menyetujui atau menolak penarikan dengan PIN |
+| Nasabah | Akun Google atau Email/Password (Firebase), aktivasi via NIS | Melihat rekening sendiri; menyetujui atau menolak penarikan dengan PIN |
 
 Rinciannya ada di [Peran & hak akses](/concepts/roles-and-permissions/).
 
@@ -73,7 +71,7 @@ Rinciannya ada di [Peran & hak akses](/concepts/roles-and-permissions/).
 
 Isi situs ini ditulis dari kode backend (route, middleware, controller, form request,
 service, resource, migration, dan test) serta dokumen di folder `docs/` repositori
-backend, pada commit `4610046` di branch `main`. Di bagian atas setiap halaman ada
+backend, pada commit `9111950` di branch `main`. Di bagian atas setiap halaman ada
 daftar **Sumber** yang dipakai.
 
 - Contoh respons JSON diambil dari permintaan sungguhan ke basis data **demo**

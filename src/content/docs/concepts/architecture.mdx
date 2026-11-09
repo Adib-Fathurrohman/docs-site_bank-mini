@@ -10,6 +10,7 @@ sources:
   - app/Services
   - docs/FRONTEND_HANDOFF.md
   - docs/AUTH.md
+  - docs/CUSTOMER_AUTH.md
 ---
 
 import { Aside, FileTree } from '@astrojs/starlight/components';
@@ -22,27 +23,34 @@ sendiri (selain halaman sambutan bawaan Laravel di `/` dan health check `/up`); 
 fungsi tersedia sebagai **REST API JSON** di bawah `/api`.
 
 <Mermaid
-	caption="Komponen sistem. Garis putus-putus: klien yang belum selesai."
+	caption="Komponen sistem. Nasabah mengautentikasi melalui Firebase, lalu menukarkan ID token dengan Sanctum token."
 	chart={`flowchart TB
   subgraph clients["Klien"]
     direction LR
     web["Aplikasi web staf<br/>React<br/>Admin · Supervisor · Teller"]
     mobile["Aplikasi mobile nasabah<br/>React Native + Expo<br/>Siswa"]
   end
+  subgraph auth["Penyedia Identitas"]
+    firebase["Firebase Authentication<br/>Google OAuth & Email/Password"]
+  end
   subgraph server["Backend Laravel 13"]
     direction TB
-    routes["routes/api.php<br/>67 route"]
+    routes["routes/api.php<br/>72 route"]
     mw["Middleware<br/>auth:sanctum · staff · customer · throttle"]
     ctrl["Controller + Form Request"]
     svc["Service<br/>aturan bisnis · transaksi DB"]
+    fb_svc["KreaitFirebaseAuth<br/>Verifikasi ID token"]
     res["API Resource<br/>bentuk respons JSON"]
     pdf["DomPDF<br/>struk & laporan"]
     sched["Scheduler<br/>prune token · expire otorisasi"]
   end
   db[("MariaDB · InnoDB<br/>FK RESTRICT · CHECK")]
-  web -. "Bearer token" .-> routes
-  mobile -. "Bearer token" .-> routes
+  mobile -->|"Sign-In SDK"| firebase
+  firebase -.->|"ID Token"| mobile
+  web -- "Bearer token (Sanctum)" --> routes
+  mobile -- "Bearer token (Sanctum)" --> routes
   routes --> mw --> ctrl --> svc --> db
+  ctrl --> fb_svc
   ctrl --> res
   svc --> pdf
   sched --> db`}
@@ -86,13 +94,14 @@ controller, dan aturan bisnis di service.
 
 <FileTree>
 - app/
+  - Contracts/ FirebaseAuth
   - Enums/ status, peran, tipe transaksi, kode akun
-  - Exceptions/ BankingException dan turunannya
+  - Exceptions/ BankingException, CustomerAuthException, PinNotSetException
   - Http/
     - Controllers/API/
       - Admin/ CustomerController, StaffController
       - Audit/ JournalController, TransactionController
-      - Customer/ AccountController, AuthController, WithdrawalAuthorizationController
+      - Customer/ AccountController, ActivationController, AuthController, WithdrawalAuthorizationController
       - Staff/ AuthController
       - Supervisor/ CashTransferController, DailyReportController
       - Teller/ CustomerLookupController, DailyReportController, ShiftController, TransactionController, WithdrawalAuthorizationController
@@ -104,7 +113,7 @@ controller, dan aturan bisnis di service.
     - Requests/
     - Resources/
   - Models/
-  - Services/
+  - Services/ CustomerActivationService, CustomerAuthService, CustomerService, PinService, TransactionService, Firebase/
 - config/bank.php
 - database/migrations/
 - routes/

@@ -9,7 +9,15 @@ sources:
   - app/Http/Controllers/API/SettingsController.php
   - app/Http/Requests
   - app/Http/Resources
+  - app/Http/Controllers/API/Admin/PinResetRequestController.php
+  - app/Http/Requests/Admin/DecidePinResetRequest.php
+  - app/Http/Resources/PinResetRequestResource.php
+  - app/Models/PinResetRequest.php
+  - app/Services/CustomerImportService.php
+  - app/Models/CustomerImport.php
+  - app/Services/PinService.php
   - docs/API.md
+  - docs/CUSTOMER_AUTH.md
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -174,26 +182,33 @@ dibuka berdasarkan id.
 | --- | --- |
 | `search` | Nama, NIS, atau nomor rekening |
 | `major_id`, `class`, `group`, `status` | Filter (tidak divalidasi, lihat L11) |
+| `activation` | `pending` (belum aktivasi app) atau `activated` (sudah aktivasi) |
+| `email` | `missing` (rekening impor tanpa email) atau `present` (memiliki email) |
 | `trashed` | `with` menyertakan rekening yang ditutup, `only` hanya menampilkan yang ditutup |
 
 <Endpoint method="POST" path="/api/admin/customers" roles="admin" />
 
-Membuka rekening. Nomor rekening dibuat otomatis; rekening mulai `active` dengan saldo
-`0`. Field `account_number`, `account_status`, dan `balance` di body diabaikan.
+Membuka rekening baru. Nomor rekening dibuat otomatis; rekening mulai `active` dengan saldo
+`0`, status aktivasi `pending`, dan tanpa PIN. Field `account_number`, `account_status`, `balance`, dan `pin` diabaikan/ditolak.
+PIN dibuat sendiri oleh nasabah di aplikasi Bank Mini setelah aktivasi.
 
 | Field | Aturan |
 | --- | --- |
 | `nis` | Wajib, maks. 20, unik (termasuk rekening yang ditutup) |
 | `full_name` | Wajib, maks. 255 |
+| `email` | Wajib, format email valid, maks. 255, unik (disimpan huruf kecil). Digunakan siswa saat aktivasi di aplikasi |
 | `class` | Wajib, `X`/`XI`/`XII` |
 | `major_id` | Wajib, jurusan yang ada |
 | `group` | Wajib, `1`–`4` |
-| `pin` | Wajib, tepat 6 digit (disimpan ter-hash) |
+
+Mengirim field `pin` akan ditolak (**422** `errors.pin: "PIN dibuat oleh nasabah di aplikasi Bank Mini setelah aktivasi."`).
 
 ```json title="201 — contoh dari basis data demo"
 {
   "data": {
     "id": 4, "account_number": "AK-2026-001", "nis": "20260004", "full_name": "Dewi Anggraini",
+    "email": "dewi.anggraini@example.test",
+    "activation_status": "pending", "activated_at": null, "pin_set": false,
     "class": "X", "group": "2",
     "major": { "id": 4, "code": "AK", "major_name": "Akuntansi dan Keuangan Lembaga" },
     "account_status": "active", "balance": 0,
@@ -202,15 +217,144 @@ Membuka rekening. Nomor rekening dibuat otomatis; rekening mulai `active` dengan
 }
 ```
 
+<Endpoint method="POST" path="/api/admin/customers/import" roles="admin" />
+
+Membuat banyak rekening nasabah sekaligus dari pembukuan lama beserta saldo dan riwayat transaksi (opsional). Menggunakan `multipart/form-data`:
+
+| Field | Tipe | Aturan |
+| --- | --- | --- |
+| `file` | file | Wajib, `.xlsx`/`.csv`/`.txt`, maks. 5 MB, maks. 1.000 nasabah. Kolom: `nis`, `nama`/`full_name`, `email` (opsional), `kelas`/`class`, `jurusan`/`major`, `rombel`/`group`, `saldo`/`balance` (opsional), `no_rekening` (opsional) |
+| `transactions_file` | file | Opsional, `.xlsx`/`.csv`/`.txt`, maks. 5 MB, maks. 10.000 baris (atau berupa sheet `Transaksi` di `file`). Kolom: `nis`, `tanggal`, `jenis` (`setor`/`tarik`), `nominal`, `keterangan` |
+
+- **Semua atau tidak sama sekali:** Jika ada satu baris yang tidak valid (format NIS/kelas salah, saldo negatif, atau riwayat transaksi menyebabkan saldo di bawah 0), seluruh impor dibatalkan dan mengembalikan **422** dengan rincian per baris spreadsheet.
+- **Saldo awal:** Bagian saldo yang tidak dijelaskan oleh riwayat transaksi otomatis dijadikan setoran saldo awal dengan catatan *"Saldo awal dari pembukuan lama"*.
+- **Tanpa email:** Rekening yang diimpor tanpa email berstatus `pending` dan dapat bertransaksi di loket teller, namun belum dapat aktivasi aplikasi hingga email diisi via `PATCH /api/admin/customers/{id}`.
+- **Transaksi impor:** Terhubung ke batch `customer_imports` (bukan shift teller, `daily_report_id: null`) sehingga tidak mengubah laporan fisik loket dan tidak dapat dikoreksi.
+
+```json title="201 — respons impor berhasil"
+{
+  "message": "Data nasabah berhasil diimpor.",
+  "data": {
+    "import_id": 1,
+    "customers_created": 25,
+    "transactions_created": 150,
+    "customers_without_email": 3,
+    "customers": [
+      { "id": 10, "account_number": "RPL-2026-010", "nis": "20260010", "full_name": "Ahmad Dani", ... }
+    ]
+  }
+}
+```
+
 <Endpoint method="PUT|PATCH" path="/api/admin/customers/{customer}" roles="admin" />
 
-Sebagian dari `nis`, `full_name`, `class`, `major_id`, `group`, `account_status`
-(`active` atau `suspended` saja), dan `pin` (6 digit; reset PIN juga membuka blokir
-PIN). Nomor rekening dan saldo tidak dapat diubah. Rekening yang ditutup menjawab `404`.
+Mengubah data nasabah: `nis`, `full_name`, `class`, `major_id`, `group`, `account_status` (`active` atau `suspended`).
+Field `email` hanya dapat diubah selama status aktivasi masih `pending` (misal perbaikan salah ketik).
+Setelah rekening diaktifkan, email terkunci (**422** `errors.email: "Email tidak dapat diubah setelah rekening diaktifkan."`).
+Field `pin` ditolak (**422** `errors.pin: "PIN dibuat oleh nasabah di aplikasi Bank Mini. Gunakan reset PIN jika nasabah lupa PIN."`).
+Nomor rekening dan saldo tidak dapat diubah. Rekening yang ditutup menjawab `404`.
+
+<Endpoint method="POST" path="/api/admin/customers/{customer}/pin-reset" roles="admin" />
+
+Mereset PIN nasabah secara langsung oleh administrator:
+
+- Mengosongkan PIN nasabah (`pin_set` menjadi `false`).
+- Mengangkat blokir percobaan PIN salah (`pin_failed_attempts = 0`, `pin_locked_until = null`).
+- Membatalkan permintaan reset PIN mandiri nasabah yang sedang terbuka (jika ada).
+- Nasabah selanjutnya membuat PIN baru di aplikasi mobile setelah login ulang via Firebase (`POST /api/customer/pin/setup`).
+
+**200 OK:**
+```json
+{
+  "message": "PIN direset. Nasabah membuat PIN baru di aplikasi Bank Mini.",
+  "data": { "id": 4, "account_number": "AK-2026-001", "pin_set": false, "...": "..." }
+}
+```
+
+## Permintaan reset PIN nasabah
+
+Endpoint untuk meninjau dan memproses permintaan reset PIN mandiri yang diajukan nasabah melalui aplikasi mobile. Selama permintaan terbuka, transaksi penarikan pada rekening nasabah dijeda untuk melindungi saldo.
+
+<Endpoint method="GET" path="/api/pin-reset-requests" roles="admin,supervisor" />
+
+<Endpoint method="GET" path="/api/pin-reset-requests/{pinResetRequest}" roles="admin,supervisor" />
+
+Daftar pengajuan reset PIN nasabah (terbaru lebih dahulu, paginasi bawaan 15 per halaman):
+
+| Query Parameter | Tipe | Keterangan |
+| --- | --- | --- |
+| `status` | string | Filter status: `pending`, `approved`, `rejected`, `cancelled`, `expired`, `completed` |
+| `customer_id` | integer | Filter berdasarkan ID satu nasabah |
+| `page`, `per_page` | integer | Paginasi halaman |
+
+Respons objek `PinResetRequest`:
+```json title="200 — contoh respons pengajuan reset PIN"
+{
+  "data": {
+    "id": "01JM6T...",
+    "status": "pending",
+    "status_label": "Menunggu persetujuan",
+    "requested_at": "2026-11-09T08:00:00Z",
+    "available_at": "2026-11-10T08:00:00Z",
+    "ready": false,
+    "expires_at": "2026-11-16T08:00:00Z",
+    "approved_at": null,
+    "rejected_at": null,
+    "cancelled_at": null,
+    "completed_at": null,
+    "decision_note": null,
+    "customer": {
+      "id": 1,
+      "account_number": "RPL-2026-001",
+      "nis": "20260001",
+      "full_name": "Budi Santoso",
+      "class": "X",
+      "group": "1",
+      "major_name": "Rekayasa Perangkat Lunak",
+      "account_status": "active",
+      "balance": 500000,
+      "pin_locked_until": null,
+      "activation_status": "activated",
+      "pin_set": true
+    },
+    "decided_by": null
+  }
+}
+```
+
+<Endpoint method="POST" path="/api/admin/pin-reset-requests/{pinResetRequest}/approve" roles="admin" />
+
+Menyetujui permohonan reset PIN nasabah (`pending` → `approved`). Admin disarankan memverifikasi identitas fisik siswa terlebih dahulu secara langsung:
+
+| Field | Tipe | Aturan | Keterangan |
+| --- | --- | --- | --- |
+| `note` | string | Opsional, maks. 255 | Catatan cara verifikasi identitas (misal: "Verifikasi langsung di ruang admin") |
+
+```json
+{
+  "note": "Siswa datang langsung membawa kartu pelajar."
+}
+```
+
+- **Notifikasi Push:** Backend mengirim notifikasi push FCM ke ponsel nasabah bahwa permohonan telah disetujui.
+- **Masa Tunggu 24 Jam:** Persetujuan admin **tidak memotong** masa tunggu. Nasabah baru dapat memasukkan PIN baru setelah stempel waktu `available_at` tercapai (24 jam sejak pengajuan).
+- Mengembalikan **200 OK** dengan objek `PinResetRequest` berstatus `approved`.
+
+<Endpoint method="POST" path="/api/admin/pin-reset-requests/{pinResetRequest}/reject" roles="admin" />
+
+Menolak permohonan reset PIN (`pending` → `rejected`):
+
+| Field | Tipe | Aturan | Keterangan |
+| --- | --- | --- | --- |
+| `note` | string | Opsional, maks. 255 | Alasan penolakan |
+
+- Mengirim notifikasi push FCM ke ponsel nasabah. Penolakan membuka kembali jeda penarikan tunai pada rekening nasabah. Nasabah dapat mengajukan permohonan baru jika diperlukan.
+- Mengembalikan **200 OK** dengan status `rejected`.
+- Mengembalikan **409** (`pin_reset_not_usable`) jika status permohonan bukan `pending`.
 
 <Endpoint method="POST" path="/api/admin/customers/{customer}/deactivate" roles="admin" />
 
-Penutupan (lulus): status `inactive`, token dicabut, soft delete. Riwayat tetap ada.
+Penutupan rekening (lulus/keluar): status rekening menjadi `inactive`, seluruh token Sanctum dicabut, akun Firebase dinonaktifkan di server Firebase, dan dilakukan soft delete. Riwayat transaksi tetap tersimpan.
 **200** Customer dengan `deleted_at`. Tidak ada pemeriksaan saldo (lihat L5).
 
 <Endpoint method="GET" path="/api/admin/customers/{customer}/card" roles="admin" />
@@ -242,11 +386,15 @@ membuat gambarnya.
 
 | Field | Keterangan |
 | --- | --- |
-| `id`, `nis`, `full_name`, `class`, `group` | |
+| `id`, `nis`, `full_name`, `class`, `group` | Identitas nasabah |
 | `account_number` | Misalnya `RPL-2026-001`, dibuat otomatis |
+| `email` | Alamat email terdaftar untuk aktivasi aplikasi |
+| `activation_status` | `"pending"` (belum aktivasi) atau `"activated"` (sudah aktivasi) |
+| `activated_at` | Waktu aktivasi berhasil (nullable) |
+| `pin_set` | Boolean: `true` jika PIN sudah dibuat, `false` jika belum |
 | `major` | `{ id, code, major_name }` |
 | `account_status` | `active`, `suspended`, `inactive` |
-| `balance` | Rupiah |
+| `balance` | Saldo dalam Rupiah |
 | `created_at`, `updated_at`, `deleted_at` | `deleted_at` terisi saat rekening ditutup |
 
-Tidak pernah dikembalikan: `pin` (hash), `pin_failed_attempts`.
+Tidak pernah dikembalikan: `firebase_uid`, `pin` (hash), `pin_failed_attempts`.

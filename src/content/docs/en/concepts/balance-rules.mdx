@@ -58,6 +58,10 @@ Customers can see the minimum balance in `GET /api/customer/balance` (`min_balan
 | `suspended` | ✓ | — | ✓ | ✓ | Admin edit |
 | `inactive` | — | — | — | — | Only by closing (graduation), which also soft-deletes the account |
 
+<Aside type="note" title="Account status vs App activation status">
+New accounts start with banking status `active` and can receive counter deposits immediately before the student activates the app. However, withdrawals require a PIN, which can only be created after the student activates the app via Firebase.
+</Aside>
+
 - Suspended accounts can still log in and view their balance. Their tokens are not
   revoked.
 - Closing an account (`POST /admin/customers/{id}/deactivate`) sets the status to

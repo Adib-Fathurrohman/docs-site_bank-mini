@@ -33,7 +33,12 @@ Defined in `config/bank.php` and listed in `.env.example`.
 | `BANK_PIN_LOCK_MINUTES` | `15` | How long the PIN stays locked (minutes) |
 | `BANK_WITHDRAWAL_AUTH_PENDING_SECONDS` | `120` | Time the customer has to approve a withdrawal request |
 | `BANK_WITHDRAWAL_AUTH_APPROVED_SECONDS` | `120` | Time the teller has to complete an approved withdrawal |
-| `SANCTUM_EXPIRATION` | `480` | API token lifetime (minutes). Absolute; activity does not extend it |
+| `SANCTUM_EXPIRATION` | `480` | Staff API token lifetime (minutes / 8 hours). Absolute |
+| `CUSTOMER_SESSION_MINUTES` | `43200` | Customer API session lifetime (minutes / 30 days). Absolute |
+| `FIREBASE_PROJECT_ID` | — | Firebase project ID for customer authentication |
+| `FIREBASE_CREDENTIALS` | — | Path to Firebase service account JSON credentials file |
+| `FIREBASE_ALLOWED_PROVIDERS` | `password,google.com` | Allowed Firebase Auth sign-in providers for customers |
+| `FIREBASE_AUTH_EMULATOR_HOST` | — | Local Firebase Auth emulator host (e.g. `127.0.0.1:9099`, optional) |
 
 The cash denominations a teller counts are also in `config/bank.php`, but cannot be
 set through `.env`: `100000`, `50000`, `20000`, `10000`, `5000`, `2000`, `1000`,

@@ -36,12 +36,16 @@ detail.
   users ||--o{ cash_transfers : "approved_by"
   users |o--o{ settings : "updated_by"
   users ||--o{ withdrawal_authorizations : "teller_id"
+  users ||--o{ customer_imports : "imported_by"
   customers ||--o{ transactions : "customer_id"
   customers ||--o{ withdrawal_authorizations : "customer_id"
-  daily_reports ||--o{ transactions : "daily_report_id"
+  daily_reports |o--o{ transactions : "daily_report_id"
+  customer_imports |o--o{ transactions : "customer_import_id"
   daily_reports ||--o{ cash_counts : "daily_report_id"
   daily_reports ||--o| cash_transfers : "daily_report_id"
   daily_reports ||--o{ withdrawal_authorizations : "daily_report_id"
+  customers ||--o{ customer_push_tokens : "customer_id"
+  personal_access_tokens ||--o{ customer_push_tokens : "personal_access_token_id"
   transactions ||--|{ accounting_journals : "transaction_id"
   transactions |o--o| transactions : "corrects_transaction_id"
   transactions |o--o| withdrawal_authorizations : "transaction_id"`}
@@ -80,16 +84,28 @@ Students' savings accounts.
 | `id` | bigint | PK |
 | `account_number` | string | Unique, generated |
 | `nis` | string | Unique |
+| `email` | string, nullable | **Unique**. Entered by admin; used for app activation |
+| `firebase_uid` | string(128), nullable | **Unique**. Saved upon first-time activation via Firebase; hidden |
+| `email_verified_at` | timestamp, nullable | Firebase email verification timestamp |
+| `activated_at` | timestamp, nullable | Mobile app activation timestamp |
 | `full_name` | string | |
 | `class` | enum `X`, `XI`, `XII` | |
 | `major_id` | FK → `majors` | RESTRICT |
 | `group` | enum `1`–`4` | Parallel class |
 | `account_status` | enum `active`, `suspended`, `inactive` | Default `active` |
-| `pin` | string | bcrypt hash, hidden |
+| `pin` | string, nullable | bcrypt hash, hidden. Created by the customer after activation |
 | `pin_failed_attempts` | tinyint unsigned, default 0 | Consecutive wrong-PIN counter |
 | `pin_locked_until` | timestamp, nullable | End of the PIN lock |
 | `balance` | integer, default 0 | `CHECK (balance >= 0)` |
 | `deleted_at` | timestamp, nullable | Soft delete (closed account) |
+
+```sql title="CHECK constraints on customers"
+-- An activated customer must be bound to a Firebase UID
+CHECK (activated_at IS NULL OR firebase_uid IS NOT NULL)
+
+-- A PIN can only exist on an activated account
+CHECK (pin IS NULL OR activated_at IS NOT NULL)
+```
 
 ## `daily_reports`
 
@@ -131,23 +147,42 @@ Unique: (`daily_report_id`, `stage`, `denomination`).
 | Column | Type | Notes |
 | --- | --- | --- |
 | `id` | bigint | PK, the transaction number on receipts |
-| `user_id` | FK → `users` | Recording teller |
+| `user_id` | FK → `users` | Recording teller (or admin on import) |
 | `customer_id` | FK → `customers` | |
-| `daily_report_id` | FK → `daily_reports` | Shift |
+| `daily_report_id` | FK → `daily_reports`, nullable | Teller shift; null for transactions imported from old bookkeeping |
+| `customer_import_id` | FK → `customer_imports`, nullable | Import batch |
 | `type` | enum `deposit`, `withdrawal`, `deposit_correction`, `withdrawal_correction` | `CHECK` on the type list |
 | `amount` | integer unsigned | `CHECK (amount > 0)` |
 | `balance_before`, `balance_after` | integer unsigned | |
 | `corrects_transaction_id` | FK → `transactions`, nullable, **unique** | One correction per transaction |
 | `authorized_by` | FK → `users`, nullable | Supervisor who authorized a correction |
-| `note` | string, nullable | Correction reason |
+| `note` | string, nullable | Correction reason or opening balance note |
 | `idempotency_key` | string(100), nullable | **Unique with `user_id`** |
 
 Indexes: (`customer_id`, `created_at`), (`user_id`, `created_at`).
 
-```sql title="chk_transactions_correction"
+```sql title="chk_transactions_correction and chk_transactions_source"
+-- corrections require the original transaction and a supervisor
 (type IN ('deposit', 'withdrawal') AND corrects_transaction_id IS NULL AND authorized_by IS NULL)
 OR (type IN ('deposit_correction', 'withdrawal_correction') AND corrects_transaction_id IS NOT NULL AND authorized_by IS NOT NULL)
+
+-- transactions come from either a teller shift or an import (deposits/withdrawals only)
+(daily_report_id IS NOT NULL AND customer_import_id IS NULL)
+OR (daily_report_id IS NULL AND customer_import_id IS NOT NULL AND type IN ('deposit', 'withdrawal'))
 ```
+
+## `customer_imports`
+
+Import batch of customer accounts, initial balances, and historical transactions from old records.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | bigint | PK |
+| `imported_by` | FK → `users` | Administrator who uploaded the spreadsheet |
+| `file_name` | string | Uploaded file name |
+| `customer_count` | integer unsigned | Number of customer accounts created |
+| `transaction_count` | integer unsigned | Number of historical transactions recorded |
+| `created_at`, `updated_at` | timestamp | |
 
 ## `accounting_journals`
 
@@ -212,6 +247,19 @@ OR (status <> 'consumed' AND transaction_id IS NULL)
 -- approved and consumed requests always have the approval times
 status NOT IN ('approved', 'consumed') OR (approved_at IS NOT NULL AND approval_expires_at IS NOT NULL)
 ```
+
+## `customer_push_tokens`
+
+FCM registration tokens of customers' devices for receiving withdrawal authorization push notifications.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | bigint | PK |
+| `customer_id` | FK → `customers` | CASCADE on delete |
+| `personal_access_token_id` | FK → `personal_access_tokens` | CASCADE on delete (deleted when the session logs out or expires) |
+| `token` | string(255) | Unique, FCM device registration token |
+| `platform` | string(10) | `android` or `ios` |
+| `created_at`, `updated_at` | timestamp | |
 
 ## `personal_access_tokens`
 

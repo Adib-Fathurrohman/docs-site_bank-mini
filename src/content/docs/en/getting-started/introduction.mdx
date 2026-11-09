@@ -39,14 +39,12 @@ transactions.
 
 | Component | Technology | Users | Status |
 | --- | --- | --- | --- |
-| Backend REST API | Laravel 13, PHP 8.3+, MariaDB, Sanctum | All clients | <Badge text="Done" variant="success" /> |
-| Staff web app | React | Admin, Supervisor, Teller | <Badge text="In development" variant="caution" /> |
+| Backend REST API | Laravel 13, PHP 8.3+, MariaDB, Sanctum, Firebase Auth | All clients | <Badge text="Done" variant="success" /> |
+| Staff web app | React 19, TypeScript, Vite, Tailwind CSS 4 | Admin, Supervisor, Teller | <Badge text="Done" variant="success" /> |
 | Customer mobile app | React Native + Expo | Customers (students) | <Badge text="Not started" variant="note" /> |
 
-The backend already provides every endpoint both clients need and is covered by
-automated tests (540 passing on SQLite and MariaDB according to
-`docs/BACKEND_CHECKPOINT.md`). Client documentation waits until the apps are
-finished; see [Client apps](/en/clients/).
+The backend provides 72 REST routes covered by comprehensive automated tests.
+Staff web app documentation is available under [Client apps](/en/clients/).
 
 ## Four actors
 
@@ -55,7 +53,7 @@ finished; see [Client apps](/en/clients/).
 | Administrator | Username + password | Manages staff, customer accounts and settings; reads the journal and reports |
 | Supervisor | Username + password | Reviews tellers' daily reports, authorizes corrections, monitors the vault and journal |
 | Teller | Username + password | Runs a shift, records deposits and withdrawals, corrects mistakes |
-| Customer (*nasabah*) | NIS or account number + 6-digit PIN | Views their own account; approves or rejects withdrawals with their PIN |
+| Customer (*nasabah*) | Google or Email/Password (Firebase), activates via NIS | Views their own account; approves or rejects withdrawals with their PIN |
 
 Details are in [Roles & permissions](/en/concepts/roles-and-permissions/).
 
@@ -75,7 +73,7 @@ Details are in [Roles & permissions](/en/concepts/roles-and-permissions/).
 
 This site was written from the backend code (routes, middleware, controllers, form
 requests, services, resources, migrations and tests) and the documents in the backend
-repository's `docs/` folder, at commit `4610046` on `main`. Each page lists its
+repository's `docs/` folder, at commit `9111950` on `main`. Each page lists its
 **Sources** at the top.
 
 - Example JSON responses were captured from real requests against the **demo**

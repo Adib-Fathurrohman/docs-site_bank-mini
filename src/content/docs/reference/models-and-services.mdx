@@ -5,7 +5,12 @@ sidebar:
   order: 2
 sources:
   - app/Models
+  - app/Models/CustomerImport.php
+  - app/Contracts/PushNotifier.php
+  - app/Models/CustomerPushToken.php
   - app/Services
+  - app/Services/CustomerImportService.php
+  - app/Services/Push/FcmPushNotifier.php
   - app/Enums
   - app/Http/Middleware
   - routes/console.php
@@ -18,12 +23,14 @@ import { Aside } from '@astrojs/starlight/components';
 | Model | Tabel | Relasi | Penjaga |
 | --- | --- | --- | --- |
 | `User` | `users` | `transactions`, `dailyReports` (teller), `reviewedDailyReports` (supervisor), `approvedCashTransfers`, `withdrawalAuthorizations` (teller) | — |
-| `Customer` | `customers` | `major`, `transactions`, `withdrawalAuthorizations` | Soft delete; `pin` di-cast `hashed` dan tersembunyi |
+| `Customer` | `customers` | `major`, `transactions`, `withdrawalAuthorizations`, `pushTokens` | Soft delete; `pin` di-cast `hashed` dan tersembunyi |
+| `CustomerPushToken` | `customer_push_tokens` | `customer`, `accessToken` | Token disembunyikan (`hidden`); terikat pada sesi Sanctum (`personal_access_tokens`) |
 | `Major` | `majors` | `customers` | — |
 | `DailyReport` | `daily_reports` | `teller`, `supervisor`, `transactions`, `cashCounts` (pecahan terbesar dulu), `cashTransfer` | Laporan `approved` tidak dapat diubah; laporan tidak pernah dapat dihapus |
 | `CashCount` | `cash_counts` | `dailyReport` | — |
-| `Transaction` | `transactions` | `customer` (termasuk yang ditutup), `teller`, `dailyReport`, `corrects`, `correction`, `authorizer`, `withdrawalAuthorization`, `accountingJournals` | Tidak dapat diubah atau dihapus |
+| `Transaction` | `transactions` | `customer` (termasuk yang ditutup), `teller`, `dailyReport`, `customerImport`, `corrects`, `correction`, `authorizer`, `withdrawalAuthorization`, `accountingJournals` | Tidak dapat diubah atau dihapus |
 | `AccountingJournal` | `accounting_journals` | `transaction` | Tidak dapat diubah atau dihapus |
+| `CustomerImport` | `customer_imports` | `importer` (`users`), `transactions` | Tidak dapat diubah atau dihapus; mencatat batch migrasi saldo dan transaksi lama |
 | `CashTransfer` | `cash_transfers` | `dailyReport`, `approver` | Tidak dapat diubah atau dihapus |
 | `Setting` | `settings` | `updatedBy` | — |
 | `WithdrawalAuthorization` | `withdrawal_authorizations` | `teller`, `customer` (termasuk yang ditutup), `dailyReport`, `transaction` | `public_id` ULID dibuat otomatis dan dipakai sebagai route key; status final tidak dapat diubah; tidak pernah dapat dihapus |
@@ -54,10 +61,15 @@ lalu memilih resource.
 | --- | --- | --- |
 | `TransactionService` | Setor, tarik, penyelesaian penarikan yang disetujui, koreksi. Semua lewat `record()` dalam satu transaksi database dengan row lock | `deposit`, `withdraw`, `completeAuthorizedWithdrawal`, `correct` |
 | `JournalService` | Menulis dua baris jurnal per transaksi | `record` |
-| `PinService` | Satu-satunya tempat PIN diperiksa; penghitung dan blokir bersama dalam transaksi sendiri | `verify`, `change` |
-| `WithdrawalAuthorizationService` | Membuat, menyetujui, menolak, membatalkan permintaan penarikan; menerapkan kedaluwarsa | `create`, `approve`, `reject`, `cancel`, `current`, `expireOverdue` |
+| `PinService` | Satu-satunya tempat PIN diperiksa; penghitung dan blokir bersama dalam transaksi sendiri | `verify`, `change`, `reset`, `setUp` |
+| `CustomerAuthService` | Autentikasi nasabah Firebase, pertukaran sesi Sanctum, buka kunci aplikasi | `loginWithFirebase`, `unlock`, `setUpPin`, `logout`, `logoutAll` |
+| `CustomerActivationService` | Validasi kepemilikan NIS dan email terverifikasi, penautan permanen identitas Firebase | `activate` |
+| `KreaitFirebaseAuth` | Adapter SDK `kreait/firebase-php` untuk verifikasi ID token dan pengecekan revocation | `verifyIdToken`, `disableUser` |
+| `FcmPushNotifier` | Implementasi `PushNotifier` berbasis Firebase Cloud Messaging untuk notifikasi permintaan penarikan baru | `notify` |
+| `WithdrawalAuthorizationService` | Membuat, menyetujui, menolak, membatalkan permintaan penarikan; menerapkan kedaluwarsa; memicu push notification | `create`, `approve`, `reject`, `cancel`, `current`, `expireOverdue` |
 | `DailyReportService` | Membuka dan menutup shift, menghitung total, keputusan supervisor | `activeShift`, `shiftForTransaction`, `shiftForCorrection`, `open`, `close`, `summarize`, `approve`, `hold`, `reject`, `withLiveTotals` |
 | `CustomerService` | Membuka rekening dengan nomor otomatis, menutup rekening | `create`, `deactivate`, `nextAccountNumber` |
+| `CustomerImportService` | Impor nasabah massal beserta saldo awal dan riwayat transaksi dari spreadsheet | `import` |
 | `SettingsService` | Membaca dan mengubah pengaturan beserta aturannya | `definitions`, `get`, `all`, `update`, `rules`, `minBalance`, `allowsMobileWithdrawalVerification`, `allowsTerminalWithdrawalVerification` |
 | `StaffImportService` | Impor staf dari `.xlsx`/`.csv`, semua atau tidak sama sekali | `import` |
 | `ReportService` | Data mutasi dan laporan tahunan | `statement`, `annual` |

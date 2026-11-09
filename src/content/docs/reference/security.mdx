@@ -6,6 +6,7 @@ sidebar:
 sources:
   - docs/PIN_VERIFICATION.md
   - docs/AUTH.md
+  - docs/CUSTOMER_AUTH.md
   - docs/RBAC.md
   - docs/BACKEND_CHECKPOINT.md
 ---
@@ -17,11 +18,13 @@ import { Aside } from '@astrojs/starlight/components';
 | Perlindungan | Penerapan |
 | --- | --- |
 | Password staf dan PIN nasabah | Hash bcrypt (`BCRYPT_ROUNDS=12`), tidak pernah muncul di respons |
-| Token API | Token Sanctum disimpan ter-hash; token mentah hanya dikembalikan sekali saat login |
-| Masa berlaku | 8 jam sejak dibuat, absolut, tanpa refresh |
-| Pencabutan | Logout mencabut token yang dipakai; memblokir/menghapus staf dan menutup rekening mencabut semua tokennya |
-| Pembatasan login | 5 percobaan per menit per username/identifier + IP |
-| Pesan login | Nasabah: pesan umum untuk identifier atau PIN yang salah; sisa percobaan tidak ditampilkan |
+| Kredensial nasabah | Dikelola oleh Firebase Authentication (Google/Email). Backend tidak pernah menyimpan atau melihat password nasabah |
+| Verifikasi token Firebase | Adapter `KreaitFirebaseAuth` memverifikasi signature, audience, issuer, expiry, serta memeriksa status revoked/disabled |
+| Token API | Token Sanctum disimpan ter-hash; token mentah hanya dikembalikan sekali saat login/aktivasi |
+| Masa berlaku token | Staf: 8 jam (`SANCTUM_EXPIRATION`). Nasabah: 30 hari (`CUSTOMER_SESSION_MINUTES`) |
+| Pencabutan token | Logout perangkat aktif via `POST /logout`; pencabutan seluruh perangkat nasabah via `POST /logout-all`; penonaktifan rekening mencabut token dan menonaktifkan pengguna di Firebase |
+| Pembatasan permintaan | Staf: 5/menit per username + IP. Nasabah: 30/menit per IP untuk login Firebase, 20/menit per IP untuk aktivasi, 5/menit per nasabah untuk unlock & PIN setup |
+| Pesan login & aktivasi | Pesan umum untuk mencegah enumerasi NIS atau email (`activation_mismatch`) |
 | Tanpa cookie | Tidak ada session atau cookie di API, sehingga CSRF tidak berlaku |
 
 ## Otorisasi

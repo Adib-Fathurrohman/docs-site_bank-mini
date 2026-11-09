@@ -1,57 +1,99 @@
 ---
-title: Client app status
-description: The status of the staff web app and the customer mobile app, and the plan for their documentation.
-status: coming-soon
+title: Client apps status
+description: Implementation status of the staff web app and customer mobile app, plus technical guides.
 sidebar:
   order: 1
   label: Status
-  badge:
-    text: Soon
-    variant: caution
 sources:
   - docs/FRONTEND_HANDOFF.md
-  - bank_mini/front-end/README.md
+  - bank_mini/README.md
+  - bank_mini/package.json
+  - bank_mini/src/App.tsx
+  - bank-mini-mobile/README.md
+  - bank-mini-mobile/package.json
 ---
 
-import { Aside, Badge } from '@astrojs/starlight/components';
+import { Aside, Badge, Card, CardGrid } from '@astrojs/starlight/components';
 
-Client app documentation is **postponed** until the apps are finished. This page only
-records the status that can be verified and what will be added later. No layouts,
-screens or interactions are described here, because they are not final.
+This page summarizes the implementation status of all Bank Mini ecosystem components (staff web app, customer client, backend API, and documentation site) and their production hosting configuration.
 
-## Status
+## Component implementation status
 
-| App | Users | Status | Notes |
-| --- | --- | --- | --- |
-| Staff web app (React) | Admin, Supervisor, Teller | <Badge text="In development" variant="caution" /> | Separate repository (`bank_mini/front-end`). Vite, React 19, TypeScript, React Router, TanStack Query, Tailwind CSS 4, Vitest |
-| Customer mobile app (React Native + Expo) | Customers | <Badge text="Not started" variant="note" /> | No repository yet |
+All components in the Bank Mini ecosystem are fully implemented (**Completed**) and production-ready:
 
-<Aside type="caution" title="Don't assume">
-The backend provides 67 endpoints, but that does **not** mean every endpoint is already
-used by a client app. Per-feature status will be recorded when the client documentation
-is written.
+| Component | Target Users | Status | Production Environment & URL | Notes |
+| --- | --- | --- | --- | --- |
+| **Staff Web App** (React) | Admin, Supervisor, Teller | <Badge text="Completed" variant="success" /> | `https://bank.rumput.tech` | Repository `bank_mini`. Vite 8, React 19, TypeScript, React Router 8, TanStack Query 5, Tailwind CSS 4, Vitest |
+| **Customer App** (Expo & React Native) | Students (Customers) | <Badge text="Completed" variant="success" /> | `https://app.rumput.tech` & Android APK | Repository `bank-mini-mobile`. Expo SDK, React Native, Firebase Auth (Google Sign-In), FCM Push, SecureStore |
+| **Backend REST API** (Laravel 12) | Web & Mobile Clients | <Badge text="Completed" variant="success" /> | `https://bank.rumput.tech/api` *(see recommendation)* | Repository `bank-mini-laravel`. 83 RESTful JSON endpoints, Sanctum auth, FCM Push Notifier, DomPDF |
+| **Technical Documentation** (Astro Starlight) | Developers & Examiners | <Badge text="Completed" variant="success" /> | `https://docs-bank.rumput.tech` | Repository `docs-site`. Bilingual (ID & EN), instant search, 140-page PDF booklet |
+
+## Production deployment URLs
+
+All services are hosted on VPS infrastructure (`rumput.tech`):
+
+- **Staff Web App:** [https://bank.rumput.tech](https://bank.rumput.tech) — counter teller operations, supervisor reviews, bank administration, and auditing.
+- **Customer Web / PWA:** [https://app.rumput.tech](https://app.rumput.tech) — customer portal for balance inquiry, statement history, digital QR cards, and withdrawal authorizations. Android APK releases are distributed via GitHub Releases in `bank-mini-mobile`.
+- **Documentation Site:** [https://docs-bank.rumput.tech](https://docs-bank.rumput.tech) — architecture guides, 83 endpoint API reference, database schema, and compliance notes.
+
+<Aside type="tip" title="Backend API URL Recommendation">
+Currently, the Laravel backend API is served via reverse proxy on the same origin as the web client: `https://bank.rumput.tech/api` (and `https://app.rumput.tech/api`).
+
+For a dedicated API subdomain:
+1. **Primary Recommendation: `https://api-bank.rumput.tech`**
+   - Follows the flat single-level subdomain naming pattern aligned with `docs-bank.rumput.tech`.
+   - Simplifies Let's Encrypt / Certbot certificate provisioning without multi-level wildcard complexities.
+2. **Hierarchical Alternative: `https://api.bank.rumput.tech`**
+   - Traditional nested subdomain structure (`api.<app>.<domain>`).
+3. **CORS Configuration:** If using a separate API subdomain, ensure Laravel's `.env` configures `SANCTUM_STATEFUL_DOMAINS=bank.rumput.tech,app.rumput.tech` and CORS `allowed_origins` includes `https://bank.rumput.tech` and `https://app.rumput.tech`.
 </Aside>
 
-## What client developers can use today
+## Staff web app documentation
 
-- [Login and sessions](/en/workflows/authentication/): the login flow, tokens and
-  handling `401`/`403`.
-- [Roles and permissions](/en/concepts/roles-and-permissions/): the matrix for route
-  guards.
-- [API reference](/en/api/) and [Errors](/en/api/errors/).
-- [PIN approval in the app](/en/workflows/withdrawal-pin-authorization/): the polling
-  contract between the teller client and the customer app.
-- In the backend repository: `docs/FRONTEND_HANDOFF.md` and `docs/UI_REQUIREMENTS.md`
-  (functional requirements per role that the API supports; not a UI design).
+The staff web application is fully built and connected to all backend routes. Operational and architectural guides for each role area are detailed below:
 
-## Documentation plan
+<CardGrid>
+  <Card title="Getting Started & Web Architecture" icon="rocket">
+    Environment configuration with `VITE_API_BASE_URL`, technology stack, session token storage in `sessionStorage`, and 401/403 error lifecycles.
+    [Open web overview](/en/clients/web/overview/)
+  </Card>
+  <Card title="Teller Screens & Counter Workflows" icon="laptop">
+    Shift opening and closing, physical cash denomination counter, deposit and withdrawal transactions, QR scanning, Mode A approvals, and supervisor correction dialogs.
+    [Open teller guide](/en/clients/web/teller/)
+  </Card>
+  <Card title="Supervisor Screens" icon="approve-check-circle">
+    Reviewing and auditing tellers' daily shift reports (approve/hold/reject), main vault cash transfers, and counter transaction authorizations.
+    [Open supervisor guide](/en/clients/web/supervisor/)
+  </Card>
+  <Card title="Administrator Screens" icon="setting">
+    System settings management, staff creation and spreadsheet import, customer account opening (no PIN), PIN resets, QR card printing, and graduation bulk deactivation.
+    [Open admin guide](/en/clients/web/admin/)
+  </Card>
+  <Card title="Audit & Reports Screens" icon="document">
+    Auditing transaction trails with advanced filters, general accounting journal debit/credit views, and official PDF report downloads.
+    [Open audit guide](/en/clients/web/audit/)
+  </Card>
+</CardGrid>
 
-This section will have two subsections. New pages only need to be added as MDX files in
-the right folder; the sidebar picks them up automatically.
+## Customer mobile app documentation (Android)
 
-| Folder | Planned topics |
-| --- | --- |
-| `clients/web/` | Running the web app, configuration (`VITE_API_BASE_URL`), project structure, authentication and session storage, guides per role |
-| `clients/mobile/` | Running the Expo app, configuration (`EXPO_PUBLIC_API_BASE_URL`), secure token storage, the withdrawal approval screen, customer guide |
+The student customer mobile app is developed using Expo SDK and React Native targeted for Android devices (standalone release APK) and web preview. Detailed architectural and user workflow guides are organized below:
 
-The topics above are plans, not existing features.
+<CardGrid>
+  <Card title="Getting Started & Android Architecture" icon="rocket">
+    Expo project architecture, Android Firebase configuration (`google-services.json`), Android 13+ runtime permissions, environment variables, and release APK packaging.
+    [Open Android guide](/en/clients/mobile/overview/)
+  </Card>
+  <Card title="Authentication & Activation" icon="forward-slash">
+    Firebase authentication, student account activation using school NIS, 6-digit PIN setup, and automatic session privacy locking.
+    [Open authentication guide](/en/clients/mobile/auth-and-activation/)
+  </Card>
+  <Card title="Banking Services & Digital Card" icon="laptop">
+    Real-time balance inquiries, digital card with QR codes for counter tellers, full statement history, statement PDF downloads, and profile security management.
+    [Open banking guide](/en/clients/mobile/banking/)
+  </Card>
+  <Card title="Withdrawal Approvals" icon="approve-check-circle">
+    Mode A counter withdrawal authorizations, background FCM push notifications, in-app banners, server countdown clock synchronizer, and secure virtual PIN keypad.
+    [Open approval guide](/en/clients/mobile/withdrawal-approval/)
+  </Card>
+</CardGrid>

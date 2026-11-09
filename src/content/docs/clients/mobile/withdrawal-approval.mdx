@@ -1,0 +1,112 @@
+---
+title: Persetujuan Penarikan Tunai
+description: Alur otorisasi penarikan loket di aplikasi Android nasabah (Mode A), notifikasi push FCM, timer hitung mundur server, dan keypad PIN aman.
+sidebar:
+  order: 4
+sources:
+  - bank-mini-mobile/src/app/(app)/approval/[id].tsx
+  - bank-mini-mobile/src/app/(app)/(tabs)/approvals.tsx
+  - bank-mini-mobile/src/components/PinPad.tsx
+  - bank-mini-mobile/src/components/ApprovalBanner.tsx
+  - bank-mini-mobile/src/push/PushManager.tsx
+  - bank-mini-mobile/src/push/messaging.native.ts
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+import Mermaid from '../../../../components/Mermaid.astro';
+
+Mode A adalah mekanisme verifikasi penarikan bawaan sistem Bank Mini. Teller loket **tidak pernah** melihat atau mengetik PIN nasabah; otorisasi penarikan sepenuhnya dilakukan oleh siswa melalui aplikasi mobile pada perangkat Android miliknya.
+
+## Alur Kerja Persetujuan (Mode A)
+
+<Mermaid
+  caption="Alur otorisasi penarikan antara teller web, backend API, dan aplikasi Android nasabah."
+  chart={`sequenceDiagram
+  autonumber
+  participant T as Teller (Web Staf)
+  participant API as Backend API
+  participant M as Nasabah (Android APK)
+
+  T->>API: POST /teller/withdrawal-authorizations {account_number, amount}
+  API-->>T: 201 Created {id, status: pending, expires_at, server_time}
+  API--)M: Push FCM (Background / In-App Banner)
+  M->>M: Ketuk notifikasi / Buka tab Persetujuan
+  M->>API: GET /customer/withdrawal-authorizations/{id}
+  API-->>M: 200 {nominal, teller, saldo, saldo_setelahnya}
+  M->>M: Siswa memeriksa rincian & memasukkan 6 digit PIN
+  M->>API: POST /customer/withdrawal-authorizations/{id}/approve {pin}
+  Note over API: PinService::verify<br/>Status beralih: approved
+  API-->>M: 200 OK {status: approved}
+  T->>API: POST /teller/withdrawal-authorizations/{id}/complete
+  Note over API: DB Transaction:<br/>lock · potong saldo · cetak struk
+  API-->>T: 201 Transaction
+  API-->>M: Polling mendeteksi status "consumed" (Selesai)`}
+/>
+
+---
+
+## 1. Notifikasi Push FCM & Banner In-App
+
+Saat teller memulai permintaan penarikan di loket:
+
+- **Notifikasi Push Android:** Backend Laravel secara asinkron (`defer`) memicu pengiriman pesan FCM ke token Android siswa:
+  - Judul: `Permintaan penarikan`
+  - Pesan: `Teller <Nama Teller> meminta persetujuan penarikan Rp <Nominal>. Buka aplikasi untuk menyetujui atau menolak.`
+  - Data: `{ "type": "withdrawal_authorization", "id": "<ULID>" }`
+- **Background Handler (`index.js`):** Memproses pesan FCM saat aplikasi Android dalam kondisi tertutup (*cold start*) atau diminimalkan. Mengetuk notifikasi akan membuka aplikasi dan mencatat `pendingRequestId`.
+- **In-App Banner (`PushManager.tsx`):** Jika aplikasi sedang aktif dibuka (*foreground*), banner hijau interaktif muncul selama 8 detik di bagian atas layar.
+- **Polling Cadangan:** Tab **Persetujuan** (`/approvals`) melakukan polling otomatis setiap 4 detik ke `GET /api/customer/withdrawal-authorizations` agar permintaan tetap terdeteksi jika siswa mematikan notifikasi push atau berada di jaringan dengan pembatasan FCM.
+
+---
+
+## 2. Layar Keputusan Penarikan (`/approval/:id`)
+
+Mengetuk permintaan penarikan akan membuka layar detail persetujuan penarikan tunai:
+
+### Sinkronisasi Hitung Mundur Server (`useCountdown`)
+- Permintaan penarikan memiliki masa berlaku **120 detik** sejak dibuat di loket.
+- Timer hitung mundur disinkronkan dengan stempel waktu jam server (`server_time`), sehingga perbedaan waktu atau zona waktu pada ponsel Android siswa tidak mempengaruhi akurasi sisa waktu.
+
+### Rincian Transaksi
+Layar menampilkan data transparan sebelum nasabah menyetujui:
+- **Nama Teller & Loket:** Petugas loket yang memulai transaksi penarikan.
+- **Nominal Penarikan:** Jumlah uang tunai yang akan ditarik (dalam Rupiah).
+- **Saldo Rekening:** Saldo tabungan saat ini dan estimasi saldo setelah penarikan berhasil.
+
+---
+
+## 3. Keypad PIN Aman (`PinPad.tsx`) & Eksekusi
+
+Persetujuan penarikan dilindungi oleh komponen keypad virtual mandiri:
+
+<Steps>
+
+1. **Input PIN:** Siswa mengetikkan 6 digit angka PIN pada keypad virtual di layar. Keypad mengacak fokus dan tidak menggunakan keyboard bawaan sistem operasi untuk mencegah keylogger.
+2. **Kirim Persetujuan:**
+   ```http
+   POST /api/customer/withdrawal-authorizations/{id}/approve
+   Content-Type: application/json
+   Authorization: Bearer <sanctum-token>
+
+   {
+     "pin": "135790"
+   }
+   ```
+3. **PIN Selalu Dikosongkan:** Nilai PIN pada state komponen segera dikosongkan setelah percobaan pengiriman dan tidak pernah disimpan di memori permanen.
+4. **Pilihan Tolak (*Reject*):** Jika siswa merasa tidak berada di loket teller atau nominal penarikan salah, siswa dapat menekan tombol **Tolak penarikan** (`POST /api/customer/withdrawal-authorizations/{id}/reject`). Permintaan langsung dibatalkan tanpa pemotongan saldo.
+
+</Steps>
+
+---
+
+## 4. Status Akhir Permintaan
+
+Aplikasi memantau perubahan status permintaan penarikan secara real-time:
+
+| Status | Tampilan di Aplikasi Nasabah |
+| --- | --- |
+| `approved` | *"Menunggu teller menyerahkan uang..."* — Menghitung mundur batas waktu penyelesaian teller (120 detik). |
+| `consumed` | *"Penarikan selesai"* — Teller telah menyelesaikan transaksi di loket dan menyerahkan uang fisik. Saldo terpotong otomatis. |
+| `rejected` | *"Permintaan ditolak"* — Nasabah menolak penarikan. Tidak ada uang yang ditarik. |
+| `cancelled` | *"Permintaan dibatalkan teller"* — Teller membatalkan transaksi di loket. |
+| `expired` | *"Waktu persetujuan habis"* — Nasabah atau teller terlambat memproses dalam batas waktu 120 detik. |

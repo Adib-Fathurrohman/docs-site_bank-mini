@@ -12,7 +12,7 @@ sources:
 import { Aside } from '@astrojs/starlight/components';
 
 **Model:** `App\Models\Customer` (tabel `customers`, tanpa nilai `role`). **Klien:**
-aplikasi mobile nasabah. **Masuk dengan:** NIS atau nomor rekening + PIN 6 digit.
+aplikasi mobile nasabah. **Masuk dengan:** Akun Firebase (Google atau Email/Password), aktivasi rekening via NIS.
 
 Semua endpoint nasabah dibatasi ke rekening milik token. Parameter seperti
 `?customer_id=` diabaikan.
@@ -26,9 +26,12 @@ Semua endpoint nasabah dibatasi ke rekening milik token. Parameter seperti
 | Melihat mutasi dengan filter dan detail satu transaksi | `GET /api/customer/transactions`, `/{id}` |
 | Mengunduh PDF mutasi sendiri | `GET /api/customer/statement/export` |
 | Menampilkan kartu digital (payload QR) untuk dipindai teller | `GET /api/customer/card` |
+| Buka kunci aplikasi (unlock) dengan PIN | `POST /api/customer/unlock` |
+| Membuat PIN awal (setelah aktivasi / reset) | `POST /api/customer/pin/setup` |
 | Mengganti PIN | `POST /api/customer/pin` |
 | Melihat, menyetujui (dengan PIN), atau menolak permintaan penarikan untuk rekening sendiri | `/api/customer/withdrawal-authorizations…` |
-| Logout | `POST /api/customer/logout` |
+| Logout perangkat ini | `POST /api/customer/logout` |
+| Logout dari semua perangkat | `POST /api/customer/logout-all` |
 
 ## Tidak dapat
 
@@ -44,9 +47,9 @@ Semua endpoint nasabah dibatasi ke rekening milik token. Parameter seperti
 | `inactive` (lulus) | — | — | — |
 
 <Aside type="caution" title="Blokir PIN bersama">
-Tiga PIN salah berturut-turut, di login, persetujuan penarikan, atau ganti PIN,
+Tiga PIN salah berturut-turut, di buka kunci, persetujuan penarikan, atau ganti PIN,
 memblokir PIN selama 15 menit di semua tempat. Lupa PIN tidak dapat dipulihkan sendiri;
-admin yang me-reset.
+admin yang me-reset via API.
 </Aside>
 
 Terkait: [Persetujuan PIN](/workflows/withdrawal-pin-authorization/) ·

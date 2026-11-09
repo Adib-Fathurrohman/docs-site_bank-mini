@@ -1,0 +1,72 @@
+---
+title: Layanan Nasabah & Kartu Digital
+description: Antarmuka tab beranda, saldo tabungan, kartu digital dengan kode QR, mutasi transaksi, ekspor PDF rekening koran, dan pengaturan profil.
+sidebar:
+  order: 3
+sources:
+  - bank-mini-mobile/src/app/(app)/(tabs)/index.tsx
+  - bank-mini-mobile/src/app/(app)/(tabs)/card.tsx
+  - bank-mini-mobile/src/app/(app)/(tabs)/history.tsx
+  - bank-mini-mobile/src/app/(app)/(tabs)/profile.tsx
+  - bank-mini-mobile/src/app/(app)/transaction/[id].tsx
+  - bank-mini-mobile/src/app/(app)/statement.tsx
+  - bank-mini-mobile/src/app/(app)/change-pin.tsx
+  - bank-mini-mobile/src/app/(app)/change-password.tsx
+  - bank-mini-mobile/src/components/PinResetBanner.tsx
+---
+
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+Setelah sesi nasabah aktif dan terbuka (`ready`), aplikasi menyajikan empat tab navigasi utama untuk mengelola tabungan harian siswa.
+
+## 1. Beranda (*Home Tab*)
+
+Layar utama menampilkan ringkasan informasi perbankan secara real-time:
+
+- **Kartu Saldo:** Menampilkan total saldo berjalan (`balance`) yang diformat dalam mata uang Rupiah, serta waktu pembaruan terakhir.
+- **Peringatan Rekening:** Jika rekening berstatus `suspended` (ditangguhkan), muncul kotak peringatan bahwa teller tidak dapat melayani transaksi hingga status diaktifkan kembali oleh admin.
+- **Banner Permintaan Penarikan:** Jika terdapat permintaan penarikan tunai yang sedang menunggu konfirmasi, banner interaktif berwarna hijau muncul di bagian atas untuk memudahkan akses cepat ke layar persetujuan.
+- **Banner Reset PIN (`PinResetBanner`):** Jika permohonan reset PIN mandiri sedang berlangsung (`pending` atau `approved`), banner oranye muncul menginformasikan status permohonan atau sisa waktu masa tunggu 24 jam beserta tombol akses langsung ke layar `/pin-reset`. Penarikan dana dibekukan selama periode ini.
+- **Riwayat Terbaru:** Menampilkan 5 mutasi terakhir dengan penanda arah transaksi (hijau untuk setoran masuk, abu-abu/oranye untuk penarikan keluar).
+
+---
+
+## 2. Kartu Digital & Kode QR (*Card Tab*)
+
+Pengganti buku tabungan fisik saat bertransaksi di loket sekolah:
+
+- **Tampilan Kartu:** Desain kartu identitas siswa Bank Mini dengan nama sekolah, nama lengkap siswa, nomor rekening, NIS, tingkat kelas, rombel, dan nama jurusan.
+- **Kode QR:** Dihasilkan secara lokal menggunakan komponen `QrCode` dengan format payload resmi:
+  ```text
+  BANKMINI:{account_number}
+  Contoh: BANKMINI:RPL-2026-001
+  ```
+- **Interaksi Teller:** Teller memindai kode QR ini menggunakan pemindai kamera (*webcam*) atau USB barcode reader pada aplikasi web staf untuk mencari data nasabah secara instan tanpa mengetik manual.
+
+---
+
+## 3. Riwayat Transaksi & Rekening Koran (*History & Statement*)
+
+### Daftar Mutasi (`/history`)
+- Menampilkan seluruh riwayat transaksi nasabah dengan paginasi tak terhingga (*infinite scroll*).
+- Setiap baris transaksi memuat: jenis transaksi (Setor / Tarik / Saldo Awal), nominal uang, saldo akhir setelah transaksi, serta stempel waktu transaksi.
+- Mengetuk baris transaksi akan membuka layar rincian transaksi (`/transaction/:id`).
+
+### Ekspor Rekening Koran PDF (`/statement`)
+- Siswa dapat mengunduh salinan resmi rekening koran tabungan (buku tabungan digital) dalam format PDF langsung ke penyimpanan perangkat Android (`/api/customer/statement/export`).
+- Dokumen PDF dibuat secara server-side menggunakan DomPDF lengkap dengan kop surat sekolah, rekapitulasi total debit/kredit, dan tabel mutasi lengkap.
+
+---
+
+## 4. Profil & Pengaturan Akun (*Profile Tab*)
+
+Tab profil mengontrol preferensi keamanan, notifikasi, dan sesi login:
+
+| Fitur | Fungsi & Alur Kerja |
+| --- | --- |
+| **Sakelar Notifikasi** | Mengaktifkan atau mematikan push notification FCM perangkat. Saat dimatikan, aplikasi memanggil `DELETE /api/customer/push-tokens`. Saat diaktifkan kembali, token FCM didaftarkan ulang via `POST /api/customer/push-tokens`. |
+| **Ganti PIN (`/change-pin`)** | Mengubah 6 digit PIN transaksi (`POST /api/customer/pin`). Nasabah memasukkan PIN lama, diikuti PIN baru dan konfirmasi PIN baru. |
+| **Ganti Password** | Memperbarui kata sandi akun Firebase siswa melalui form ganti password (`/change-password`). Hanya aktif untuk akun dengan autentikasi email & password (disembunyikan untuk login Google). |
+| **Kunci Aplikasi** | Mengunci sesi saat ini secara manual dan langsung mengalihkan aplikasi ke layar Buka Kunci PIN (`/unlock`). |
+| **Keluar (*Sign Out*)** | Mencabut token akses Sanctum di server (`POST /api/customer/logout`), menghapus token FCM perangkat, dan menghapus sesi lokal di KeyStore. |
+| **Keluar Semua Perangkat** | Opsi `logoutAll` untuk mencabut seluruh sesi Sanctum dan menghapus seluruh token push notification yang terdaftar atas nama nasabah di semua ponsel. |

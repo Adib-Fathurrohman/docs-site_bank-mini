@@ -1,35 +1,42 @@
 ---
 title: Autentikasi
-description: Endpoint login satu pintu untuk keempat aktor, profil pengguna saat ini, dan logout.
+description: Endpoint login staf dan nasabah (Firebase), aktivasi rekening nasabah, profil pengguna, dan logout.
 sidebar:
   order: 2
 sources:
   - routes/api.php
   - app/Http/Controllers/API/LoginController.php
-  - app/Http/Requests/Auth
+  - app/Http/Controllers/API/StaffAuthController.php
+  - app/Http/Controllers/API/Customer/AuthController.php
+  - app/Http/Controllers/API/Customer/ActivationController.php
+  - app/Http/Requests/Auth/StaffLoginRequest.php
+  - app/Http/Requests/Auth/FirebaseLoginRequest.php
+  - app/Http/Requests/Customer/ActivateRequest.php
   - docs/API.md
   - docs/AUTH.md
+  - docs/CUSTOMER_AUTH.md
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 import Endpoint from '../../../components/Endpoint.astro';
 
-Alur dan aturan lengkap ada di [Login dan sesi](/workflows/authentication/).
+Alur dan arsitektur lengkap dijelaskan di [Alur autentikasi](/workflows/authentication/)
+dan dokumen teknis backend `docs/CUSTOMER_AUTH.md`.
 
-## Login
+## Login satu pintu
 
-<Endpoint method="POST" path="/api/login" limit="5/menit per username/identifier + IP" />
+<Endpoint method="POST" path="/api/login" limit="5/menit per username/identifier + IP (staf) atau 30/menit per IP (id_token nasabah)" />
 
-Pintu masuk tunggal untuk keempat peran. Kirim **salah satu** set kredensial;
-`data.actor` memberi tahu klien portal mana yang dibuka.
+Pintu masuk gateway untuk semua peran. Kirim kredensial staf (`username` + `password`)
+atau ID token Firebase nasabah (`id_token`). Nilai `data.actor` memberi tahu portal yang aktif.
 
 | Field | Aturan |
 | --- | --- |
 | `username`, `password` | Staf: wajib bersamaan. `username` maks. 255 |
-| `identifier`, `pin` | Nasabah: NIS atau nomor rekening (maks. 50) dan PIN tepat 6 digit |
+| `id_token` | Nasabah: string ID token dari Firebase Authentication (Google atau email/password) |
 
-Jika `username` diisi, login staf yang berjalan; jika tidak dan `identifier` diisi,
-login nasabah yang berjalan; jika keduanya kosong, `422`.
+Jika `username` diisi, autentikasi staf dijalankan. Jika `id_token` diisi, autentikasi nasabah
+Firebase dijalankan. Jika keduanya tidak diisi, server mengembalikan `422`.
 
 ```http
 POST /api/login
@@ -54,55 +61,123 @@ Content-Type: application/json
 }
 ```
 
-**200 (nasabah):** `actor` bernilai `"customer"` dan `data.customer` berisi objek
-[Customer](/api/admin/#objek-customer).
-
-**422:** kredensial salah (`Username atau password salah.` /
-`NIS/nomor rekening atau PIN salah.`), staf diblokir, rekening ditutup, PIN diblokir,
-atau tidak ada kredensial:
-
-```json
+```json title="200 (nasabah) — contoh dari basis data demo"
 {
-  "message": "Isi username dan password (staf) atau NIS/nomor rekening dan PIN (nasabah).",
-  "errors": { "username": ["Isi username dan password (staf) atau NIS/nomor rekening dan PIN (nasabah)."] }
+  "data": {
+    "actor": "customer",
+    "token": "12|5pJ...",
+    "token_type": "Bearer",
+    "expires_at": "2026-12-02T02:00:00.000000Z",
+    "customer": {
+      "id": 1,
+      "account_number": "RPL-2026-001",
+      "nis": "20260001",
+      "full_name": "Budi Santoso",
+      "email": "budi.santoso@example.test",
+      "activation_status": "activated",
+      "activated_at": "2026-11-02T01:00:00.000000Z",
+      "pin_set": true,
+      "class": "X",
+      "group": "1",
+      "major": { "id": 1, "code": "RPL", "major_name": "Rekayasa Perangkat Lunak" },
+      "account_status": "active",
+      "balance": 500000,
+      "created_at": "2026-10-27T13:10:33.000000Z",
+      "updated_at": "2026-11-02T01:00:00.000000Z",
+      "deleted_at": null
+    }
+  }
 }
 ```
 
-PIN salah dihitung ke blokir PIN bersama, tetapi login tidak menampilkan sisa
-percobaan. Saat diblokir, pesannya
-`Terlalu banyak percobaan PIN salah. Coba lagi pukul 09:15.` (jam lokal).
+Jika tidak ada kredensial yang diberikan:
 
-### Alias
+```json title="422 Unprocessable Entity"
+{
+  "message": "Isi username dan password (staf), atau masuk dengan akun Google/email (nasabah).",
+  "errors": {
+    "username": ["Isi username dan password (staf), atau masuk dengan akun Google/email (nasabah)."]
+  }
+}
+```
 
-<Endpoint method="POST" path="/api/staff/login" limit="5/menit per username/identifier + IP" />
+## Portal login khusus
 
-<Endpoint method="POST" path="/api/customer/login" limit="5/menit per username/identifier + IP" />
+<Endpoint method="POST" path="/api/staff/login" limit="5/menit per username + IP" />
 
-Alias yang hanya menerima body jenisnya sendiri. Gunakan `POST /api/login` saja
-(catatan I2).
+Hanya menerima body kredensial staf: `{ "username": "...", "password": "..." }`.
+
+<Endpoint method="POST" path="/api/customer/auth/login" limit="30/menit per IP" />
+
+Pintu masuk login nasabah menggunakan ID token Firebase:
+
+```json
+{ "id_token": "<firebase-id-token>" }
+```
+
+Respons `200` sama dengan format login nasabah di atas. Jika akun belum diaktivasi pertama kali atau token ditolak, API mengembalikan kode kesalahan terstruktur:
+
+| Status | `code` | Keterangan |
+| --- | --- | --- |
+| 401 | `firebase_token_invalid` | Tanda tangan tidak valid, kedaluwarsa, dicabut, atau akun Firebase dinonaktifkan |
+| 403 | `account_not_linked` | Akun Firebase belum terhubung ke nasabah mana pun. Aplikasi mengarahkan pengguna ke layar aktivasi NIS |
+| 403 | `provider_not_allowed` | Provider selain `password` atau `google.com` |
+| 403 | `email_not_verified` | Email pada akun Firebase belum diverifikasi |
+| 403 | `account_inactive` | Rekening bank mini telah ditutup |
+| 503 | `auth_unavailable` | Layanan Firebase tidak dapat dihubungi atau belum dikonfigurasi |
+
+## Aktivasi rekening nasabah
+
+<Endpoint method="POST" path="/api/customer/activation" limit="20/menit per IP" />
+
+Endpoint publik untuk menautkan akun Firebase pertama kali ke rekening nasabah berdasarkan nomor NIS:
+
+```json
+{
+  "nis": "20260001",
+  "id_token": "<firebase-id-token>"
+}
+```
+
+Email yang terverifikasi pada token Firebase harus persis sama dengan email yang didaftarkan admin pada rekening nasabah tersebut.
+
+**200 OK:** Mengembalikan format data login nasabah (`activation_status: "activated"`, `pin_set: false`). Aplikasi kemudian meminta nasabah membuat PIN awal via `POST /api/customer/pin/setup`.
+
+Kode penolakan:
+
+| Status | `code` | Keterangan |
+| --- | --- | --- |
+| 403 | `activation_mismatch` | NIS tidak ditemukan atau email Firebase tidak cocok dengan data pendaftaran admin (satu pesan umum untuk pencegahan enumerasi) |
+| 403 | `email_not_verified` | Email belum diverifikasi di Firebase |
+| 403 | `account_inactive` | Rekening nasabah berstatus nonaktif/tutup |
+| 409 | `already_activated` | Rekening nasabah ini sudah terhubung ke akun Firebase lain |
+| 409 | `identity_already_linked` | Akun Firebase ini sudah terhubung ke rekening nasabah lain |
 
 ## Staf
 
 <Endpoint method="GET" path="/api/staff/me" roles="admin,supervisor,teller" />
 
-Staf yang sedang masuk: `{ "data": Staff }`. Panggil saat aplikasi dibuka untuk
-memvalidasi token yang tersimpan.
+Staf yang sedang masuk: `{ "data": Staff }`. Panggil saat aplikasi web dibuka untuk memvalidasi token yang tersimpan.
 
 <Endpoint method="POST" path="/api/staff/logout" roles="admin,supervisor,teller" />
 
-Mencabut token yang dipakai: `200 { "message": "Berhasil keluar." }`.
+Mencabut token yang sedang dipakai: `200 { "message": "Berhasil keluar." }`.
 
 ## Nasabah
 
 <Endpoint method="GET" path="/api/customer/me" roles="customer" />
 
-Nasabah yang sedang masuk: `{ "data": Customer }` beserta jurusan.
+Nasabah yang sedang masuk: `{ "data": Customer }` beserta data jurusan.
 
 <Endpoint method="POST" path="/api/customer/logout" roles="customer" />
 
-Mencabut token yang dipakai: `200 { "message": "Berhasil keluar." }`.
+Mencabut token sesi yang sedang dipakai di perangkat ini: `200 { "message": "Berhasil keluar." }`.
 
-<Aside type="note" title="Token">
-Token berlaku 480 menit sejak dibuat (absolut). Respons login tidak memuat waktu
-kedaluwarsa dan tidak ada endpoint refresh. Token yang kedaluwarsa menghasilkan `401`.
+<Endpoint method="POST" path="/api/customer/logout-all" roles="customer" />
+
+Mencabut **seluruh** token Sanctum milik nasabah di semua perangkat: `200 { "message": "Berhasil keluar dari semua perangkat." }`.
+
+<Aside type="note" title="Masa berlaku sesi">
+Token staf berlaku **480 menit** (8 jam) sesuai `SANCTUM_EXPIRATION`. Token nasabah berlaku lebih panjang
+(**43.200 menit** / 30 hari) sesuai `CUSTOMER_SESSION_MINUTES`, dan tanggal kedaluwarsanya disertakan pada field `expires_at` saat login.
 </Aside>

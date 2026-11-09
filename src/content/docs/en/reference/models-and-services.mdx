@@ -5,7 +5,12 @@ sidebar:
   order: 2
 sources:
   - app/Models
+  - app/Models/CustomerImport.php
+  - app/Contracts/PushNotifier.php
+  - app/Models/CustomerPushToken.php
   - app/Services
+  - app/Services/CustomerImportService.php
+  - app/Services/Push/FcmPushNotifier.php
   - app/Enums
   - app/Http/Middleware
   - routes/console.php
@@ -18,12 +23,14 @@ import { Aside } from '@astrojs/starlight/components';
 | Model | Table | Relations | Guards |
 | --- | --- | --- | --- |
 | `User` | `users` | `transactions`, `dailyReports` (teller), `reviewedDailyReports` (supervisor), `approvedCashTransfers`, `withdrawalAuthorizations` (teller) | — |
-| `Customer` | `customers` | `major`, `transactions`, `withdrawalAuthorizations` | Soft deletes; `pin` cast `hashed` and hidden |
+| `Customer` | `customers` | `major`, `transactions`, `withdrawalAuthorizations`, `pushTokens` | Soft deletes; `pin` cast `hashed` and hidden |
+| `CustomerPushToken` | `customer_push_tokens` | `customer`, `accessToken` | Token is hidden; bound to Sanctum session (`personal_access_tokens`) |
 | `Major` | `majors` | `customers` | — |
 | `DailyReport` | `daily_reports` | `teller`, `supervisor`, `transactions`, `cashCounts` (largest denomination first), `cashTransfer` | An `approved` report cannot be changed; reports can never be deleted |
 | `CashCount` | `cash_counts` | `dailyReport` | — |
-| `Transaction` | `transactions` | `customer` (including closed ones), `teller`, `dailyReport`, `corrects`, `correction`, `authorizer`, `withdrawalAuthorization`, `accountingJournals` | Cannot be updated or deleted |
+| `Transaction` | `transactions` | `customer` (including closed ones), `teller`, `dailyReport`, `customerImport`, `corrects`, `correction`, `authorizer`, `withdrawalAuthorization`, `accountingJournals` | Cannot be updated or deleted |
 | `AccountingJournal` | `accounting_journals` | `transaction` | Cannot be updated or deleted |
+| `CustomerImport` | `customer_imports` | `importer` (`users`), `transactions` | Cannot be updated or deleted; records data migration batches with opening balances |
 | `CashTransfer` | `cash_transfers` | `dailyReport`, `approver` | Cannot be updated or deleted |
 | `Setting` | `settings` | `updatedBy` | — |
 | `WithdrawalAuthorization` | `withdrawal_authorizations` | `teller`, `customer` (including closed ones), `dailyReport`, `transaction` | `public_id` ULID generated automatically and used as the route key; final statuses cannot be changed; can never be deleted |
@@ -54,10 +61,15 @@ service and pick a resource.
 | --- | --- | --- |
 | `TransactionService` | Deposits, withdrawals, completing approved withdrawals, corrections. All through `record()` in one database transaction with row locks | `deposit`, `withdraw`, `completeAuthorizedWithdrawal`, `correct` |
 | `JournalService` | Writes the two journal lines per transaction | `record` |
-| `PinService` | The only place a PIN is checked; shared counter and lock in its own transaction | `verify`, `change` |
-| `WithdrawalAuthorizationService` | Creates, approves, rejects and cancels withdrawal requests; applies expiry | `create`, `approve`, `reject`, `cancel`, `current`, `expireOverdue` |
+| `PinService` | The only place a PIN is checked; shared counter and lock in its own transaction | `verify`, `change`, `reset`, `setUp` |
+| `CustomerAuthService` | Firebase customer authentication, Sanctum session exchange, app session unlock | `loginWithFirebase`, `unlock`, `setUpPin`, `logout`, `logoutAll` |
+| `CustomerActivationService` | NIS ownership and verified email validation, permanent Firebase identity binding | `activate` |
+| `KreaitFirebaseAuth` | Adapter for the `kreait/firebase-php` SDK for ID token verification and revocation check | `verifyIdToken`, `disableUser` |
+| `FcmPushNotifier` | `PushNotifier` implementation backed by Firebase Cloud Messaging for withdrawal authorization alerts | `notify` |
+| `WithdrawalAuthorizationService` | Creates, approves, rejects and cancels withdrawal requests; applies expiry; triggers push notifications | `create`, `approve`, `reject`, `cancel`, `current`, `expireOverdue` |
 | `DailyReportService` | Opens and closes shifts, computes totals, supervisor decisions | `activeShift`, `shiftForTransaction`, `shiftForCorrection`, `open`, `close`, `summarize`, `approve`, `hold`, `reject`, `withLiveTotals` |
 | `CustomerService` | Opens accounts with generated numbers, closes accounts | `create`, `deactivate`, `nextAccountNumber` |
+| `CustomerImportService` | Bulk-imports customers with initial balances and transaction histories from spreadsheets | `import` |
 | `SettingsService` | Reads and changes settings and their rules | `definitions`, `get`, `all`, `update`, `rules`, `minBalance`, `allowsMobileWithdrawalVerification`, `allowsTerminalWithdrawalVerification` |
 | `StaffImportService` | Imports staff from `.xlsx`/`.csv`, all or nothing | `import` |
 | `ReportService` | Statement and annual report data | `statement`, `annual` |

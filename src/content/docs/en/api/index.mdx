@@ -1,6 +1,6 @@
 ---
 title: API overview
-description: Conventions of the Bank Mini REST API, headers, money and time formats, pagination, enums, rate limits, and the full list of 67 endpoints.
+description: Conventions of the Bank Mini REST API, headers, money and time formats, pagination, enums, rate limits, and the full list of 83 endpoints.
 sidebar:
   order: 1
   label: Overview
@@ -13,8 +13,8 @@ sources:
 import { Aside } from '@astrojs/starlight/components';
 import EndpointIndex from '../../../../components/EndpointIndex.astro';
 
-The backend provides **67 JSON routes** under `/api` (66 distinct paths; `PUT|PATCH`
-share one route). The list at the bottom of this page is generated from
+The backend provides **83 JSON routes** under `/api` (80 distinct paths; `PUT|PATCH`
+share a route on customers and settings). The list at the bottom of this page is generated from
 `docs/API_SUMMARY.json`, which is built from `php artisan route:list`.
 
 ## Conventions

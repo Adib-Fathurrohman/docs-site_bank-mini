@@ -1,0 +1,178 @@
+---
+title: Authentication & Activation
+description: Firebase authentication flows, NIS-based account activation, initial 6-digit PIN creation, and app session privacy locking.
+sidebar:
+  order: 2
+sources:
+  - bank-mini-mobile/src/session/SessionProvider.tsx
+  - bank-mini-mobile/src/session/firebaseAuth.ts
+  - bank-mini-mobile/src/components/GoogleButton.tsx
+  - bank-mini-mobile/src/app/sign-in.tsx
+  - bank-mini-mobile/src/app/register.tsx
+  - bank-mini-mobile/src/app/verify-email.tsx
+  - bank-mini-mobile/src/app/forgot-password.tsx
+  - bank-mini-mobile/src/app/activate.tsx
+  - bank-mini-mobile/src/app/create-pin.tsx
+  - bank-mini-mobile/src/app/unlock.tsx
+  - bank-mini-mobile/src/app/pin-reset.tsx
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+import Mermaid from '../../../../../components/Mermaid.astro';
+
+The Bank Mini mobile application employs a multi-tier authentication model pairing **Firebase Authentication** for identity verification with **Laravel Sanctum** for session management.
+
+## Session State Machine (`SessionProvider`)
+
+Screen routing and permission boundaries are governed by a state machine inside `SessionProvider`:
+
+<Mermaid
+  caption="Customer mobile session lifecycle."
+  chart={`stateDiagram-v2
+  [*] --> loading: Launch app
+  loading --> signedOut: No session / expired session
+  loading --> locked: Valid stored session found
+  signedOut --> signedOut: Firebase sign-in
+  signedOut --> activate: Account not linked to NIS
+  activate --> createPin: NIS binding successful
+  signedOut --> createPin: Sign-in successful, no PIN set
+  createPin --> ready: 6-digit PIN created
+  locked --> ready: PIN unlock verified
+  ready --> locked: 1 minute in background / lock button
+  ready --> signedOut: Sign out / account closed`}
+/>
+
+| Stage | Trigger / Condition | Rendered Screen |
+| --- | --- | --- |
+| `loading` | Reading token from KeyStore/Keychain and Firebase state | Splash / Loading indicator |
+| `unavailable` | Backend REST API unreachable during bootstrap | Connectivity notice with retry action |
+| `signedOut` | No active session or user logged out | Sign In, Register, Forgot Password, Verify Email |
+| `createPin` | Sanctum session active, but `pin_set === false` | Initial PIN creation (`/create-pin`) |
+| `locked` | Valid session stored, app locked for privacy | PIN Unlock screen (`/unlock`) |
+| `ready` | Session authenticated and PIN unlocked | Main tab navigator and banking screens |
+
+---
+
+## 1. Firebase Sign-In & Registration (`/sign-in`, `/register`)
+
+- **Google Sign-In First:** The app highlights **Continue with Google** (`GoogleButton.tsx`) as the primary login entry point on both Android (`@react-native-google-signin/google-signin`) and web. Students can sign in using their school Google accounts in one tap without remembering separate passwords.
+- **School-Registered Email & Password:** Students can also register or sign in with their email and password combination as an alternative.
+- **Email Verification:** Self-registered students using password auth must confirm their email before continuing to account activation.
+- **Token Exchange:** Following Firebase authentication, the app exchanges the Firebase `id_token` for a Sanctum session token (`POST /api/customer/auth/login`).
+- **Unlinked Account Redirection:** If login returns `403 account_not_linked`, the app automatically navigates the student to the NIS activation screen.
+
+---
+
+## 2. Account Activation with NIS (`/activate`)
+
+Permanently binds the student's Firebase identity with their school savings account:
+
+<Steps>
+
+1. Student enters their official **Nomor Induk Siswa (NIS)**.
+2. The app submits the activation request:
+   ```http
+   POST /api/customer/activation
+   Content-Type: application/json
+
+   {
+     "id_token": "<firebase-id-token>",
+     "nis": "20260001"
+   }
+   ```
+3. The backend validates that:
+   - The email on the Firebase `id_token` matches the student's registered account email.
+   - The account activation status is currently `pending`.
+   - The Firebase email is verified.
+4. On success, the backend returns **200 OK** with a Sanctum session token, advancing the session state to `createPin`.
+
+</Steps>
+
+---
+
+## 3. Setting Up the 6-Digit PIN (`/create-pin`)
+
+Required immediately after first-time activation or following an administrative PIN reset:
+
+- The student enters a 6-digit numerical PIN via an on-screen keypad.
+- The app requires a confirmation entry to prevent accidental typos.
+- The request is dispatched to the backend:
+  ```http
+  POST /api/customer/pin/setup
+  Content-Type: application/json
+  Authorization: Bearer <sanctum-token>
+
+  {
+    "id_token": "<fresh-firebase-id-token>",
+    "pin": "135790",
+    "pin_confirmation": "135790"
+  }
+  ```
+- Upon receiving **201 Created**, the session transitions to `ready`, granting immediate access to banking services.
+
+---
+
+## 4. Session Privacy & Unlock Screen (`/unlock`)
+
+To ensure account balance and statement confidentiality:
+
+- **Auto-Lock:** Moving the app to the background for more than 60 seconds (`LOCK_AFTER_MS`) triggers an automatic transition to `locked`.
+- **Manual Lock:** Students can lock the application at any time using the **Kunci aplikasi** action under the Profile tab.
+- **Unlocking:** The student inputs their 6-digit PIN on the unlock screen:
+  ```http
+  POST /api/customer/unlock
+  Content-Type: application/json
+  Authorization: Bearer <sanctum-token>
+
+  {
+    "pin": "135790"
+  }
+  ```
+- **Brute-Force Guard:** Incorrect PIN attempts are limited to 3 consecutive failures. Exceeding the threshold locks the PIN temporarily for 15 minutes (`pin_locked_until`).
+- **Forgot PIN Button:** The unlock screen and home dashboard provide a **Lupa PIN?** button directing the customer to the self-service PIN reset flow (`/pin-reset`).
+
+---
+
+## 5. Self-Service PIN Reset Workflow (`/pin-reset`)
+
+When a student forgets their 6-digit transaction PIN, the mobile app provides an in-app recovery mechanism protected by multi-step security controls:
+
+<Steps>
+
+1. **Identity Confirmation (`ConfirmIdentity.tsx`):**
+   The student re-authenticates via Google Sign-In or Firebase password to obtain a fresh Firebase `id_token`.
+
+2. **Submitting the Request:**
+   The app submits the reset request to the backend:
+   ```http
+   POST /api/customer/pin-reset-requests
+   Content-Type: application/json
+   Authorization: Bearer <sanctum-token>
+
+   {
+     "id_token": "<fresh-firebase-id-token>"
+   }
+   ```
+   The request status transitions to `pending`. During this period, outgoing withdrawals are frozen (`422 pin_reset_in_progress`).
+
+3. **Bank Administrator Review:**
+   The student visits the school bank counter for physical identity verification. An administrator approves the request on the web dashboard (`/pin-reset-requests`). Status transitions to `approved`.
+
+4. **24-Hour Cooldown Wait Period:**
+   Upon approval, a mandatory 24-hour waiting period (`available_at`) begins to protect against social engineering and stolen devices. The `/pin-reset` screen displays a real-time countdown timer. The student can cancel their own open request at any time (`POST /api/customer/pin-reset-requests/{id}/cancel`).
+
+5. **Entering the New PIN:**
+   Once the cooldown period elapses (`ready: true`), the keypad unlocks. The student inputs and confirms a new 6-digit PIN:
+   ```http
+   POST /api/customer/pin-reset-requests/{id}/complete
+   Content-Type: application/json
+   Authorization: Bearer <sanctum-token>
+
+   {
+     "pin": "654321",
+     "pin_confirmation": "654321"
+   }
+   ```
+   Upon successful completion (**200 OK**), the new PIN becomes active, the withdrawal freeze is lifted, and the app immediately unlocks to the `ready` stage.
+
+</Steps>

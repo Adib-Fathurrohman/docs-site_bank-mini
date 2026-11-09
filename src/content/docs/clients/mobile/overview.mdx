@@ -1,0 +1,124 @@
+---
+title: Memulai & Arsitektur Android
+description: Arsitektur aplikasi mobile nasabah React Native & Expo, instalasi, konfigurasi Firebase, FCM push, dan pembuatan rilis APK Android.
+sidebar:
+  order: 1
+sources:
+  - bank-mini-mobile/README.md
+  - bank-mini-mobile/package.json
+  - bank-mini-mobile/app.json
+  - bank-mini-mobile/eas.json
+  - bank-mini-mobile/src/api/client.ts
+  - bank-mini-mobile/src/lib/config.ts
+  - bank-mini-mobile/src/lib/firebase.native.ts
+  - bank-mini-mobile/src/lib/secureStore.ts
+  - bank-mini-mobile/src/push/messaging.native.ts
+  - bank-mini-mobile/DEPLOY.md
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Aplikasi nasabah Bank Mini dirancang khusus untuk siswa sekolah menggunakan **Expo (React Native)** dengan fokus utama platform **Android** (serta preview web). Siswa dapat memantau saldo tabungan, mutasi rekening, menampilkan kartu digital QR, serta menerima notifikasi push dan menyetujui penarikan tunai di loket teller (Mode A).
+
+## Teknologi & Arsitektur
+
+- **Framework Inti:** React Native 0.79, Expo SDK 53, React 19, TypeScript.
+- **Navigasi & Routing:** Expo Router 5 (berbasis struktur berkas `app/`, tab navigasi, dan modal screen).
+- **Data Fetching & Cache:** TanStack Query 5 (caching respons API, invalidasi otomatis saat mutasi selesai, dan polling berkala).
+- **Autentikasi Siswa:** Firebase Authentication SDK (`@react-native-firebase/auth` untuk native Android, Firebase Web SDK untuk preview web).
+- **Push Notification:** Firebase Cloud Messaging (FCM) dengan penanganan background service di `index.js`.
+- **Keamanan Kredensial:** `expo-secure-store` untuk menyimpan token akses Sanctum di Android KeyStore. **PIN nasabah tidak pernah disimpan** di penyimpanan lokal maupun state persisten.
+- **QR Generator:** `react-native-qrcode-svg` untuk merender payload kartu siswa (`BANKMINI:{account_number}`).
+
+## Menjalankan di Lingkungan Pengembangan
+
+<Steps>
+
+1. Masuk ke direktori repositori mobile dan pasang dependensi:
+
+   ```bash
+   cd ../bank-mini-mobile
+   npm install
+   ```
+
+2. Jalankan di browser (pratinjau web):
+
+   ```bash
+   npm run web
+   ```
+
+   Aplikasi web nasabah terbuka di `http://localhost:8081`.
+
+3. Menjalankan di perangkat atau emulator Android:
+
+   Karena fitur push notification FCM menggunakan modul native `@react-native-firebase`, aplikasi memerlukan *development build* (bukan Expo Go standar):
+
+   ```bash
+   # Melakukan prebuild untuk meng-generate folder android/
+   npx expo prebuild
+
+   # Menjalankan Metro bundler dan build Android APK debug ke emulator/perangkat USB
+   npm run android
+   ```
+
+   > [!NOTE]
+   > Emulator Android harus menggunakan Google Play System Image agar layanan Google Play Services dan Firebase Cloud Messaging (FCM) berfungsi.
+
+</Steps>
+
+## Konfigurasi Lingkungan (`.env.local`)
+
+Secara bawaan tanpa file `.env.local`, aplikasi mengarah ke endpoint API produksi: `https://api-bank.rumput.tech/api` (atau `http://localhost:8000/api` pada mode `__DEV__`).
+
+Untuk pengujian lokal di perangkat fisik, buat berkas `.env.local` pada direktori `bank-mini-mobile`:
+
+```dotenv
+# Alamat API Backend Laravel (gunakan IP LAN komputer untuk pengujian ponsel fisik)
+EXPO_PUBLIC_API_URL=http://192.168.1.10:8000/api
+
+# Konfigurasi Proyek Firebase (Produksi)
+EXPO_PUBLIC_FIREBASE_PROJECT_ID=bank-mini-rumput
+EXPO_PUBLIC_FIREBASE_API_KEY=<firebase-web-api-key>
+
+# Opsional: Emulator Firebase Auth Lokal
+# EXPO_PUBLIC_FIREBASE_AUTH_EMULATOR=http://192.168.1.10:9099
+```
+
+> [!TIP]
+> Ponsel fisik yang terhubung ke jaringan Wi-Fi tidak dapat menjangkau `http://localhost:8000`. Gunakan alamat IP lokal komputer Anda pada variabel `EXPO_PUBLIC_API_URL`.
+
+## Konfigurasi Firebase & FCM Android
+
+- **Identitas Aplikasi & Branding:** Package name Android didefinisikan sebagai `tech.rumput.bankmini` pada `app.json`. Desain visual dilengkapi splash screen animasi (`AnimatedSplash.tsx`) dan logo resmi Bank Mini (`LogoMark.tsx`, `Brand.tsx`).
+- **File Kredensial:** Berkas `google-services.json` diletakkan di root repositori mobile dan disalin secara otomatis ke `android/app/google-services.json` saat prebuild.
+- **Izin Notifikasi Android 13+:** Aplikasi secara otomatis meminta izin runtime `POST_NOTIFICATIONS` saat siswa pertama kali mengaktifkan notifikasi atau login ke akun yang telah memiliki PIN.
+- **Penyimpanan Token FCM:** Token registrasi FCM didaftarkan ke backend via `POST /api/customer/push-tokens` dan disimpan bersama ID sesi Sanctum aktif.
+
+## Rilis APK Produksi
+
+Paket rilis Android APK mandiri (*standalone release APK*) dapat dibangun melalui dua metode:
+
+### Metode 1: Expo Application Services (EAS Build)
+
+Repositori menyertakan konfigurasi `eas.json` untuk build cloud maupun lokal:
+
+```bash
+# Build APK pratinjau / internal testing
+npx eas-cli build --platform android --profile preview
+
+# Build rilis produksi
+npx eas-cli build --platform android --profile production
+```
+
+### Metode 2: Gradle Lokal
+
+```bash
+# Build APK rilis menggunakan Gradle di direktori android/
+cd android
+./gradlew assembleRelease
+```
+
+File APK rilis yang dihasilkan berada di:
+`android/app/build/outputs/apk/release/app-release.apk`
+
+APK ditandatangani menggunakan release keystore (`bank-mini-release.jks`) dengan alias `bank-mini` dan didistribusikan melalui GitHub Releases repositori `bank-mini-mobile`.

@@ -6,7 +6,7 @@ Indonesian is the primary language (served at `/`), English the secondary one
 (served at `/en/`).
 
 The content documents the Laravel backend in `../bank-mini-laravel`. It was written
-from the backend code and the documents in its `docs/` folder at commit `4610046`.
+from the backend code and the documents in its `docs/` folder at commit `9111950`.
 The client apps (React staff web app, Expo customer app) are not finished, so their
 section only holds a status page for now.
 

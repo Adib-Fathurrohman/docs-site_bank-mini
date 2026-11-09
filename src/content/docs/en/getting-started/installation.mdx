@@ -125,8 +125,9 @@ php artisan serve --host=0.0.0.0 --port=8000
 | Browser on the same laptop | `http://localhost:8000/api` |
 | Phone on the same Wi-Fi | `http://<laptop-ip>:8000/api` |
 | Android emulator | `http://10.0.2.2:8000/api` |
+| VPS Production Environment | `https://bank.rumput.tech/api` (or `https://api-bank.rumput.tech`) |
 
-A production or demo URL has not been decided; set it in the deployment environment.
+In production, the staff web app is served at `https://bank.rumput.tech`, the customer app at `https://app.rumput.tech`, and technical documentation at `https://docs-bank.rumput.tech`.
 
 ## Demo accounts
 
@@ -135,18 +136,22 @@ deposits recorded in yesterday's teller shift, which is closed and approved, so
 balances, statements, journal and vault are consistent and the teller can open a new
 shift today.
 
-| Actor | Login | Password / PIN |
-| --- | --- | --- |
-| Administrator | `admin` | `password` |
-| Supervisor | `supervisor` | `password` |
-| Teller | `teller` | `password` |
-| Customer | NIS `20260001`–`20260003` or account `RPL-2026-001`, `DKV-2026-001`, `RPL-2026-002` | PIN `123456` |
+| Actor | Login | Password / PIN | Notes |
+| --- | --- | --- | --- |
+| Administrator | `admin` | `password` | |
+| Supervisor | `supervisor` | `password` | |
+| Teller | `teller` | `password` | |
+| Customer | NIS `20260001`–`20260003` (emails `@example.test`) | None yet | Accounts start in `pending` status. Customers activate with their registered email via Firebase, then create a PIN in the app |
 
 <Aside type="caution" title="Demo only">
-Change every demo password and PIN before using the system outside the exam
-environment. The seeded `withdrawal_verification` setting is `mobile`, so withdrawals
-need approval in the customer app unless an admin switches it to `terminal` or `both`.
+Change every demo staff password before using the system outside the exam environment. To test customer activation locally, change a demo customer's email to a reachable address or use the Firebase Auth Emulator.
 </Aside>
+
+## CI/CD and Deployment Automation
+
+The backend repository includes a GitHub Actions workflow (`.github/workflows/ci-cd.yml`):
+- Runs automated tests and code checks on every push and pull request.
+- Automatically deploys the `production` branch to a VPS via SSH and rsync, running `deploy/post-deploy.sh` to migrate the database, cache routes/config, and reload PHP-FPM.
 
 ## Running the tests
 

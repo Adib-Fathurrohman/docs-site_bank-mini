@@ -125,8 +125,9 @@ php artisan serve --host=0.0.0.0 --port=8000
 | Browser di laptop yang sama | `http://localhost:8000/api` |
 | HP di Wi-Fi yang sama | `http://<IP-laptop>:8000/api` |
 | Emulator Android | `http://10.0.2.2:8000/api` |
+| Lingkungan Produksi VPS | `https://bank.rumput.tech/api` (atau `https://api-bank.rumput.tech`) |
 
-URL untuk produksi atau demo belum ditentukan; tetapkan di lingkungan deployment.
+Untuk lingkungan produksi, web staf disajikan di `https://bank.rumput.tech`, aplikasi nasabah di `https://app.rumput.tech`, dan dokumentasi teknis di `https://docs-bank.rumput.tech`.
 
 ## Akun demo
 
@@ -135,18 +136,22 @@ sungguhan di shift teller tanggal kemarin yang sudah ditutup dan disetujui, sehi
 saldo, mutasi, jurnal, dan brankas konsisten, dan teller bisa membuka shift baru hari
 ini.
 
-| Aktor | Login | Password / PIN |
-| --- | --- | --- |
-| Administrator | `admin` | `password` |
-| Supervisor | `supervisor` | `password` |
-| Teller | `teller` | `password` |
-| Nasabah | NIS `20260001`–`20260003` atau rekening `RPL-2026-001`, `DKV-2026-001`, `RPL-2026-002` | PIN `123456` |
+| Aktor | Login | Password / PIN | Catatan |
+| --- | --- | --- | --- |
+| Administrator | `admin` | `password` | |
+| Supervisor | `supervisor` | `password` | |
+| Teller | `teller` | `password` | |
+| Nasabah | NIS `20260001`–`20260003` (email `@example.test`) | Belum dibuat | Akun berstatus `pending`. Nasabah mengaktifkan akun via Firebase dengan email terdaftar, lalu membuat PIN di aplikasi |
 
 <Aside type="caution" title="Hanya untuk demo">
-Ganti semua password dan PIN demo sebelum dipakai di luar lingkungan ujian. Pengaturan
-`withdrawal_verification` hasil seeder adalah `mobile`, sehingga penarikan butuh
-persetujuan di aplikasi nasabah kecuali admin mengubahnya ke `terminal` atau `both`.
+Ganti semua password staf demo sebelum dipakai di luar lingkungan ujian. Untuk mencoba aktivasi nasabah di lingkungan lokal, ganti email salah satu nasabah demo ke alamat email yang dapat Anda akses atau gunakan Firebase Auth Emulator.
 </Aside>
+
+## Otomasi CI/CD dan Deployment
+
+Backend menyertakan alur kerja GitHub Actions (`.github/workflows/ci-cd.yml`):
+- Menjalankan linting dan seluruh test suite PHPUnit/Pest pada setiap push dan pull request.
+- Men-deploy branch `production` secara otomatis ke server VPS via rsync dan SSH, mengeksekusi skrip `deploy/post-deploy.sh` untuk migrasi database, caching config/route, dan restart PHP-FPM.
 
 ## Menjalankan test
 

@@ -24,9 +24,9 @@ penarikan. Teller **tidak pernah** melihat, mengetik, atau mengirim PIN, dan nas
 | | |
 | --- | --- |
 | Aktor | Teller (membuat dan menyelesaikan), nasabah (menyetujui dengan PIN atau menolak) |
-| Prasyarat | Mode `mobile`/`both`; teller punya shift bertanggal hari ini; rekening `active`; PIN tidak diblokir; saldo − nominal ≥ saldo minimum; tidak ada permintaan terbuka milik teller ini maupun untuk nasabah ini |
+| Prasyarat | Mode `mobile`/`both`; teller punya shift bertanggal hari ini; rekening `active`; nasabah sudah mengaktifkan aplikasi dan membuat PIN (ditolak `422 customer_app_not_activated` jika belum aktivasi, atau `422 pin_not_set` jika belum buat PIN); PIN tidak diblokir; saldo − nominal ≥ saldo minimum; tidak ada permintaan terbuka milik teller ini maupun untuk nasabah ini |
 | Batas waktu | 120 detik untuk menyetujui, lalu 120 detik untuk menyelesaikan |
-| Pembaruan | Polling (tanpa push) |
+| Pembaruan | Push notification (FCM) ke perangkat nasabah + polling cadangan |
 | Hasil | Satu transaksi `withdrawal` per permintaan, tidak lebih |
 
 ## Urutan lengkap
@@ -41,11 +41,13 @@ penarikan. Teller **tidak pernah** melihat, mengetik, atau mengirim PIN, dan nas
   T->>A: POST /teller/withdrawal-authorizations {account_number, amount}
   Note over A: cek shift, status, blokir PIN,<br/>saldo minimum, permintaan terbuka
   A-->>T: 201 {id, status: pending, expires_at, server_time}
-  loop setiap ±2 detik
+  Note over A: Push FCM dikirim asinkron (defer)<br/>ke token perangkat nasabah
+  A--)N: Notifikasi FCM {id, title: "Permintaan penarikan"}
+  loop setiap ±2 detik (atau tap notifikasi)
     T->>A: GET /teller/withdrawal-authorizations/{id}
     A-->>T: status: pending
   end
-  N->>A: GET /customer/withdrawal-authorizations (polling)
+  N->>A: GET /customer/withdrawal-authorizations (atau buka detail)
   A-->>N: nominal, nama teller, saldo, saldo setelahnya
   N->>A: POST /customer/withdrawal-authorizations/{id}/approve {pin}
   Note over A: PinService::verify<br/>pending → approved
@@ -209,8 +211,7 @@ status `200`. Tidak perlu `Idempotency-Key`.
 
 ## Batasan yang diketahui
 
-- **Polling saja (L19).** Nasabah harus membuka aplikasi atau menyegarkan untuk
-  melihat permintaan baru.
+- **Push notification FCM & fallback polling.** Notifikasi push FCM dikirim otomatis saat permintaan dibuat. Jika perangkat nasabah offline, belum mengaktifkan notifikasi, atau token belum terdaftar, aplikasi tetap dapat mendeteksi permintaan baru via polling berkala.
 - **Token nasabah tanpa ability (L20).** Perangkat mana pun tempat nasabah login dapat
   menyetujui.
 - **Rekening ditutup di tengah proses (L21).** Jika admin menutup rekening antara

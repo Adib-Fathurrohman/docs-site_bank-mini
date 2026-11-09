@@ -232,6 +232,16 @@
 	overflow-wrap: normal;
 }
 
+/* Badges must never break words across lines; table cells with badges shrink-to-fit cleanly. */
+.sl-badge {
+	white-space: nowrap;
+}
+
+.sl-markdown-content td:has(.sl-badge) {
+	white-space: nowrap;
+	width: 1%;
+}
+
 @media (max-width: 50rem) {
 	.sl-markdown-content :is(th, td):not(:where(.not-content *)) {
 		min-width: 7.5rem;
@@ -308,3 +318,31 @@
 .pagination-links a:hover {
 	border-color: var(--sl-color-accent);
 }
+
+/* ---------- View Transitions (smooth page navigation) ---------- */
+
+@view-transition {
+	navigation: auto;
+}
+
+header.header {
+	view-transition-name: site-header;
+}
+
+.sidebar-pane {
+	view-transition-name: site-sidebar;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+	animation-duration: 0.12s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	::view-transition-group(*),
+	::view-transition-old(*),
+	::view-transition-new(*) {
+		animation: none !important;
+	}
+}
+

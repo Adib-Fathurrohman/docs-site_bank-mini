@@ -6,16 +6,26 @@ sidebar:
 sources:
   - routes/api.php
   - app/Http/Controllers/API/Customer/AccountController.php
+  - app/Http/Controllers/API/Customer/AuthController.php
+  - app/Http/Controllers/API/Customer/PinResetController.php
+  - app/Http/Controllers/API/Customer/PushTokenController.php
+  - app/Http/Requests/Customer/CompletePinResetRequest.php
+  - app/Http/Requests/Customer/PinResetRequestRequest.php
+  - app/Http/Requests/Customer/PushTokenRequest.php
+  - app/Http/Requests/Customer/SetUpPinRequest.php
+  - app/Http/Requests/Customer/UnlockRequest.php
   - app/Http/Resources/StatementLineResource.php
+  - app/Services/PinResetService.php
   - app/Services/PinService.php
   - docs/API.md
+  - docs/CUSTOMER_AUTH.md
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 import Endpoint from '../../../components/Endpoint.astro';
 
 Semua endpoint dibatasi ke rekening milik token **nasabah**; `?customer_id=` dan
-parameter sejenis diabaikan. Login, profil, dan logout ada di
+parameter sejenis diabaikan. Login, aktivasi, profil, dan logout ada di
 [Autentikasi](/api/authentication/); persetujuan penarikan ada di
 [Otorisasi penarikan](/api/withdrawal-authorizations/#sisi-nasabah).
 
@@ -70,6 +80,47 @@ Bentuknya sama dengan kartu di sisi admin, dengan `qr_payload`
 (`BANKMINI:{account_number}`) untuk ditampilkan sebagai kode QR di loket. Payload QR
 hanya mengidentifikasi nasabah, tidak mengotorisasi apa pun (L17).
 
+## Buka kunci aplikasi (Unlock)
+
+<Endpoint method="POST" path="/api/customer/unlock" roles="customer" limit="5/menit per nasabah" />
+
+Memverifikasi PIN nasabah saat aplikasi mobile dibuka kembali selama sesi masih aktif:
+
+```json
+{ "pin": "123456" }
+```
+
+| Status | Respons | Keterangan |
+| --- | --- | --- |
+| 200 | `{ "message": "PIN benar." }` | PIN valid |
+| 422 | `{ "message": "PIN salah. Sisa percobaan: 2.", "remaining_attempts": 2 }` | PIN salah; dihitung ke batas 3 kali percobaan bersama |
+| 422 | `{ "message": "Terlalu banyak percobaan PIN salah. Coba lagi pukul ...", "pin_locked_until": "..." }` | PIN diblokir sementara (15 menit) |
+| 422 | `{ "code": "pin_not_set", "message": "Nasabah belum membuat PIN. PIN dibuat oleh nasabah di aplikasi Bank Mini setelah akun diaktifkan." }` | Nasabah belum membuat PIN awal |
+
+## Buat PIN awal
+
+<Endpoint method="POST" path="/api/customer/pin/setup" roles="customer" limit="5/menit per nasabah" />
+
+Digunakan nasabah setelah aktivasi akun pertama kali, atau setelah admin melakukan reset PIN:
+
+| Field | Aturan |
+| --- | --- |
+| `id_token` | Wajib, ID token Firebase terbaru (re-autentikasi) yang cocok dengan akun tertaut |
+| `pin` | Wajib, 6 digit angka |
+| `pin_confirmation` | Wajib, harus sama dengan `pin` |
+
+```json
+{
+  "id_token": "<fresh-firebase-id-token>",
+  "pin": "135790",
+  "pin_confirmation": "135790"
+}
+```
+
+- **201 Created:** `{ "message": "PIN berhasil dibuat." }`
+- **403 Forbidden:** `{ "code": "identity_mismatch" }` jika token ID milik akun Firebase yang berbeda dari pemilik rekening
+- **409 Conflict:** `{ "code": "pin_already_set" }` jika PIN sudah pernah dibuat (gunakan ganti PIN)
+
 ## Ganti PIN
 
 <Endpoint method="POST" path="/api/customer/pin" roles="customer" />
@@ -81,7 +132,126 @@ hanya mengidentifikasi nasabah, tidak mengotorisasi apa pun (L17).
 | `new_pin_confirmation` | Harus sama dengan `new_pin` |
 
 **200** `{ "message": "PIN berhasil diubah." }`. `current_pin` yang salah dihitung ke
-blokir yang sama dengan login dan penarikan (**422** dengan `remaining_attempts`).
+blokir yang sama dengan buka kunci dan penarikan (**422** dengan `remaining_attempts`).
+Jika PIN belum pernah dibuat, mengembalikan **422** (`code: "pin_not_set"`).
+
+## Reset PIN mandiri (Lupa PIN)
+
+Fitur permohonan reset PIN mandiri (v0.2.1) untuk nasabah yang lupa PIN:
+- **Pengamanan ganda:** Permohonan wajib disetujui administrator dan PIN baru hanya dapat dibuat setelah melewati masa tunggu 24 jam (`BANK_PIN_RESET_WAIT_HOURS`).
+- **Jeda penarikan tunai:** Selama permohonan terbuka (`pending` atau `approved`), seluruh transaksi penarikan (loket teller, otorisasi Mode A, dan persetujuan di app) dijeda (**422** `pin_reset_in_progress`) untuk mencegah pencurian saldo jika ponsel berpindah tangan. Setoran tidak terpengaruh.
+- **Notifikasi push:** Ponsel nasabah menerima notifikasi FCM pada setiap tahapan (saat diajukan, saat disetujui/ditolak, dan saat waktu tunggu selesai), sehingga pemilik sah dapat langsung membatalkan jika permohonan bukan miliknya.
+
+<Endpoint method="GET" path="/api/customer/pin-reset-request" roles="customer" />
+
+Mengambil permohonan reset PIN mandiri nasabah yang sedang aktif (`pending` atau `approved`), atau `null` jika tidak ada permohonan terbuka:
+
+```json title="200 — respons permohonan aktif"
+{
+  "data": {
+    "id": "01JM6T...",
+    "status": "pending",
+    "status_label": "Menunggu persetujuan",
+    "requested_at": "2026-11-09T08:00:00Z",
+    "available_at": "2026-11-10T08:00:00Z",
+    "ready": false,
+    "expires_at": "2026-11-16T08:00:00Z",
+    "approved_at": null,
+    "rejected_at": null,
+    "cancelled_at": null,
+    "completed_at": null,
+    "decision_note": null
+  }
+}
+```
+
+<Endpoint method="POST" path="/api/customer/pin-reset-requests" roles="customer" limit="5/menit per nasabah" />
+
+Mengajukan permohonan reset PIN mandiri baru. Memerlukan autentikasi ulang Firebase:
+
+| Field | Tipe | Aturan | Keterangan |
+| --- | --- | --- | --- |
+| `id_token` | string | Wajib | ID token Firebase terbaru (re-autentikasi) yang cocok dengan akun tertaut |
+
+```json
+{
+  "id_token": "<fresh-firebase-id-token>"
+}
+```
+
+- **201 Created:** Mengembalikan data `PinResetRequest` baru berstatus `pending`.
+- **409 Conflict:** Mengembalikan `pin_reset_already_requested` jika nasabah sudah memiliki permohonan aktif.
+- **422 Unprocessable:** Mengembalikan `pin_not_set` jika akun belum pernah membuat PIN (gunakan `/pin/setup`).
+
+<Endpoint method="POST" path="/api/customer/pin-reset-requests/{pinResetRequest}/cancel" roles="customer" />
+
+Membatalkan permohonan reset PIN yang sedang terbuka. Menghapus status permohonan (`status: cancelled`) dan langsung mengakhiri jeda penarikan tunai pada rekening nasabah.
+
+- **200 OK:** Mengembalikan data `PinResetRequest` dengan status `cancelled`.
+- **409 Conflict:** Mengembalikan `pin_reset_not_usable` jika permohonan sudah selesai, kedaluwarsa, atau ditolak.
+
+<Endpoint method="POST" path="/api/customer/pin-reset-requests/{pinResetRequest}/complete" roles="customer" limit="5/menit per nasabah" />
+
+Menetapkan PIN 6 digit baru setelah permohonan disetujui admin dan masa tunggu 24 jam tercapai (`ready: true`):
+
+| Field | Tipe | Aturan | Keterangan |
+| --- | --- | --- | --- |
+| `id_token` | string | Wajib | ID token Firebase terbaru dari akun tertaut |
+| `pin` | string | Wajib, 6 digit | PIN baru |
+| `pin_confirmation` | string | Wajib | Harus sama dengan `pin` |
+
+```json
+{
+  "id_token": "<fresh-firebase-id-token>",
+  "pin": "246810",
+  "pin_confirmation": "246810"
+}
+```
+
+- **200 OK:** `{ "message": "PIN berhasil diganti." }`. PIN baru langsung aktif, blokir salah PIN diangkat, dan jeda penarikan tunai berakhir.
+- **409 Conflict:** `pin_reset_not_approved` jika admin belum menyetujui, atau `pin_reset_not_ready` jika waktu sekarang belum melewati `available_at`.
+
+## Daftarkan token push notification
+
+<Endpoint method="POST" path="/api/customer/push-tokens" roles="customer" limit="10/menit per nasabah" />
+
+Mendaftarkan FCM registration token perangkat untuk menerima push notification permintaan
+otorisasi penarikan baru. Token diikat ke sesi aktif (`personal_access_token_id`):
+
+| Field | Tipe | Aturan | Keterangan |
+| --- | --- | --- | --- |
+| `token` | string | Wajib, maks 255 | FCM registration token perangkat |
+| `platform` | string | Wajib, `android` \| `ios` | Platform sistem operasi perangkat |
+
+```json
+{
+  "token": "fcm-registration-token-example-...",
+  "platform": "android"
+}
+```
+
+- **201 Created:** `{ "message": "Notifikasi aktif di perangkat ini." }` jika token baru didaftarkan.
+- **200 OK:** `{ "message": "Notifikasi aktif di perangkat ini." }` jika token sudah terdaftar sebelumnya.
+
+Token bersifat unik; jika sebelumnya didaftarkan nasabah lain di perangkat yang sama, token otomatis dialihkan ke nasabah dan sesi pemanggil. Token dihapus otomatis saat logout, logout semua sesi, deaktivasi akun, atau masa berlaku token akses kedaluwarsa.
+
+## Hapus token push notification
+
+<Endpoint method="DELETE" path="/api/customer/push-tokens" roles="customer" limit="10/menit per nasabah" />
+
+Menonaktifkan pengiriman notifikasi ke perangkat ini (misalnya nasabah mematikan toggle notifikasi di profil/pengaturan aplikasi):
+
+| Field | Tipe | Aturan | Keterangan |
+| --- | --- | --- | --- |
+| `token` | string | Wajib, maks 255 | Token registrasi FCM yang akan dimatikan |
+
+```json
+{
+  "token": "fcm-registration-token-example-..."
+}
+```
+
+- **200 OK:** `{ "message": "Notifikasi dimatikan di perangkat ini." }` (juga berlaku jika token memang sudah tidak ada).
 
 ## Objek StatementLine
 

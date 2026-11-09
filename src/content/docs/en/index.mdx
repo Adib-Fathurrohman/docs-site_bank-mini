@@ -67,7 +67,7 @@ supervisor reviews each teller's daily report before the cash moves to the vault
 	/>
 	<LinkCard
 		title="API reference"
-		description="67 endpoints with parameters, validation rules, example responses and errors."
+		description="83 endpoints with parameters, validation rules, example responses and errors."
 		href="/en/api/"
 	/>
 	<LinkCard
@@ -87,16 +87,16 @@ supervisor reviews each teller's daily report before the cash moves to the vault
 | You are | Read first |
 | --- | --- |
 | A backend developer | [Installation](/en/getting-started/installation/) → [Architecture](/en/concepts/architecture/) → [Database schema](/en/reference/database-schema/) → [Services](/en/reference/models-and-services/) |
-| Building the staff web app (React) | [Authentication](/en/workflows/authentication/) → [Roles & permissions](/en/concepts/roles-and-permissions/) → [API reference](/en/api/) → [Errors](/en/api/errors/) |
-| Building the customer mobile app (Expo) | [Authentication](/en/workflows/authentication/) → [Customer API](/en/api/customer/) → [PIN approval](/en/workflows/withdrawal-pin-authorization/) |
-| A UKK examiner or supervisor | [Introduction](/en/getting-started/introduction/) → [Transaction lifecycle](/en/concepts/transaction-lifecycle/) → [Audit trail](/en/concepts/audit-trail/) → [Security](/en/reference/security/) |
+| Building / using the staff web app (React) | [Web Guide](/en/clients/web/overview/) → [Teller Screens](/en/clients/web/teller/) → [Supervisor Screens](/en/clients/web/supervisor/) → [Admin Screens](/en/clients/web/admin/) |
+| Building / using the customer mobile app (Expo) | [Mobile Guide](/en/clients/mobile/overview/) → [Auth & Activation](/en/clients/mobile/auth-and-activation/) → [Customer Banking](/en/clients/mobile/banking/) |
+| A UKK examiner or supervisor | [Introduction](/en/getting-started/introduction/) → [Client Status](/en/clients/) → [Transaction lifecycle](/en/concepts/transaction-lifecycle/) → [Audit trail](/en/concepts/audit-trail/) |
 
 ## Component status
 
-This documentation only describes features that can be verified in the code.
+This documentation covers fully implemented and verified features across all ecosystem components:
 
 | Component | Status | Notes |
 | --- | --- | --- |
-| Laravel backend (REST API) | <Badge text="Done" variant="success" /> | 67 routes, covered by automated tests. Fully documented on this site |
-| Staff web app (React) | <Badge text="In development" variant="caution" /> | Separate repository. Its documentation waits until the app is finished |
-| Customer mobile app (Expo) | <Badge text="Not started" variant="note" /> | No repository yet. See [Client apps](/en/clients/) |
+| Laravel backend (REST API) | <Badge text="Completed" variant="success" /> | 83 routes, covered by automated tests. Fully documented under [API reference](/en/api/) |
+| Staff web app (React) | <Badge text="Completed" variant="success" /> | Repository `bank_mini` (React 19 + Vite 8). Teller counter, supervisor, admin, & audit portal at `https://bank.rumput.tech`. Guide at [Staff Web App](/en/clients/web/overview/) |
+| Customer mobile app (Expo) | <Badge text="Completed" variant="success" /> | Repository `bank-mini-mobile` (Expo SDK 53 + React Native). Android APK release & Web, Firebase & FCM push integration. Guide at [Mobile App](/en/clients/mobile/overview/) |
