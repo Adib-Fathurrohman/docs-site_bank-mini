@@ -22,15 +22,19 @@ cd "$work"
 
 npm ci --no-audit --no-fund --loglevel=error
 SITE_URL=https://docs-bank.rumput.tech npm run build
-BACKEND_DIR="$root/../bank-mini-laravel" npm run -s check:links
-npm run -s check:api
+npm run -s check:links
+BACKEND_DIR="$root/../bank-mini-laravel" npm run -s check:api
 
 # A static site only: nothing that looks like configuration, source or a secret.
 bad=$(find dist \( -name '.*' -o -name '*.map' -o -name '*.php' -o -name '*.env' -o -name 'package.json' \) -print -quit)
 [ -z "$bad" ] || { echo "Unexpected file in the build: $bad" >&2; exit 1; }
 
 mkdir -p "$root/dist-release"
-tar -czf "$root/dist-release/$name.tar.gz" -C dist --no-xattrs .
+# COPYFILE_DISABLE: no macOS AppleDouble (._*) files in the archive.
+COPYFILE_DISABLE=1 tar -czf "$root/dist-release/$name.tar.gz" -C dist --no-xattrs .
+if tar -tzf "$root/dist-release/$name.tar.gz" | grep -qE '(^|/)\._'; then
+    echo "AppleDouble files in the archive" >&2; exit 1
+fi
 cd "$root/dist-release"
 shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
 cat "$name.tar.gz.sha256"

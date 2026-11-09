@@ -67,13 +67,13 @@ Production: **https://docs-bank.rumput.tech**, a static build served by nginx on
 `rumput.tech` VPS from `/var/www/rumput/bank-mini/docs/current` (versioned folders in
 `releases/`, `current` is a symlink switched only after the release passed its checks).
 
-1. Commit, bump `version` in `package.json`, tag and push: `git tag -a v0.2.1 -m "Docs v0.2.1"`,
-   `git push origin main v0.2.1`.
+1. Commit, bump `version` in `package.json`, tag and push: `git tag -a v0.2.2 -m "Docs v0.2.2"`,
+   `git push origin main v0.2.2`.
 2. Build the artifact (static build with `SITE_URL`, link and API checks, secret scan):
-   `deploy/build-release.sh 0.2.1` → `dist-release/rumput-bank-mini-docs-v0.2.1.tar.gz` + `.sha256`.
-3. Publish it: `gh release create v0.2.1 dist-release/rumput-bank-mini-docs-v0.2.1.tar.gz
-   dist-release/rumput-bank-mini-docs-v0.2.1.tar.gz.sha256 --verify-tag --title "Docs v0.2.1"`.
-4. On the VPS: `/var/www/rumput/bank-mini/bin/deploy-docs.sh 0.2.1 <sha256>` (downloads,
+   `deploy/build-release.sh 0.2.2` → `dist-release/rumput-bank-mini-docs-v0.2.2.tar.gz` + `.sha256`.
+3. Publish it: `gh release create v0.2.2 dist-release/rumput-bank-mini-docs-v0.2.2.tar.gz
+   dist-release/rumput-bank-mini-docs-v0.2.2.tar.gz.sha256 --verify-tag --title "Docs v0.2.2"`.
+4. On the VPS: `/var/www/rumput/bank-mini/bin/deploy-docs.sh 0.2.2 <sha256>` (downloads,
    verifies the checksum, checks the build, switches `current`; nothing is restarted).
    Rollback: `/var/www/rumput/bank-mini/bin/rollback-docs.sh <older version>`.
 
